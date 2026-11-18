@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from nicegui import ui
 
-from amrie import interpret_single
 from amrie.breakpoint import get_applicable_breakpoints
 from amrie.expert_rule import RuleCodes, get_applicable_expert_rules
 from amrie.expected_resistance import get_applicable_expected_resistance_rules
@@ -16,6 +15,7 @@ from web.components.intrinsic_dialog import open_intrinsic_dialog
 from web.helpers import (
     build_full_test_codes,
     get_potency_options,
+    interpret_for_display,
     make_single_tab_config,
     split_full_test_codes,
 )
@@ -128,7 +128,7 @@ def single_page() -> None:
                 results_area.clear()
                 with results_area:
                     for code in build_full_codes():
-                        result = interpret_single(
+                        result = interpret_for_display(
                             config,
                             organism_select.value,
                             code,

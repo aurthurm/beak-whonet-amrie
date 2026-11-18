@@ -1,332 +1,409 @@
-# Web Application
+# Web UI and REST API
 
-AMRIE-py includes a browser-based UI and REST API built with [NiceGUI](https://nicegui.io/) on top of FastAPI. Both run in a **single Python process** — NiceGUI mounts the UI routes and API endpoints on the same server.
+AMRIE-py ships a browser UI and a REST API in **one Python process**:
+[NiceGUI](https://nicegui.io/) serves the pages and mounts FastAPI endpoints on the
+same server. The web layer (`web/`) only calls the engine (`src/amrie/`); it never
+changes interpretation logic.
 
-The web layer wraps the existing engine in `src/amrie/`; it imports `amrie` but never modifies engine code. For engine internals, see [`architecture.md`](architecture.md).
-
----
-
-## Folder structure
-
-```
-web/
-├── main.py                 Entry point — `ui.run()` on port 8080
-├── state.py                Shared read-only lookup tables (import time)
-├── helpers.py              Config builders, WHONET code helpers, serializers
-├── api/                    FastAPI REST endpoints (registered via NiceGUI `app`)
-│   ├── interpret.py        Single + batch interpretation
-│   ├── breakpoints.py      Applicable breakpoint query
-│   ├── rules.py            Expert + intrinsic rule queries
-│   ├── qc.py               QC range evaluation
-│   └── reference.py        Organism / antibiotic / filter option lists
-├── pages/                  NiceGUI page routes
-│   ├── single.py           `/` — single-drug interpretation
-│   ├── file_mode.py        `/file` — batch file processing
-│   └── qc.py               `/qc` — QC reference strain check
-├── components/             Reusable UI pieces
-│   ├── header.py           Tab navigation
-│   ├── filters.py          Guideline / year / breakpoint-type / site filters
-│   ├── breakpoint_dialog.py
-│   ├── expert_dialog.py
-│   └── intrinsic_dialog.py
-└── models/
-    ├── requests.py         Pydantic request bodies
-    └── responses.py        Pydantic response shapes
-```
-
-Side-effect imports in `main.py` register all API routes and page handlers before `ui.run()` starts.
+- [Install and run](#install-and-run)
+- [Pages](#pages)
+- [REST API](#rest-api)
+  - [`POST /api/interpret/single`](#post-apiinterpretsingle)
+  - [`POST /api/interpret/file`](#post-apiinterpretfile)
+  - [`POST /api/qc`](#post-apiqc)
+  - [`POST /api/breakpoints`](#post-apibreakpoints)
+  - [`POST /api/expert-rules`](#post-apiexpert-rules)
+  - [`POST /api/intrinsic-rules`](#post-apiintrinsic-rules)
+  - [Reference lists](#reference-lists)
+- [Calling the API from Python](#calling-the-api-from-python)
+- [How the web layer configures the engine](#how-the-web-layer-configures-the-engine)
+- [Architecture](#architecture)
+- [Deployment](#deployment)
 
 ---
 
-## Architecture
-
-### Single-process NiceGUI + FastAPI
-
-NiceGUI embeds a FastAPI application. API modules register routes with `from nicegui import app` and `@app.post(...)` / `@app.get(...)`. The UI uses `@ui.page(...)` decorators for HTML pages served alongside the API.
-
-Interactive OpenAPI docs are enabled (`fastapi_docs=True`) at **`/docs`** when the server is running.
-
-### State model
-
-| Layer | Scope | Contents |
-|---|---|---|
-| `web/state.py` | Process-wide, read-only | Organism/antibiotic option maps, guideline lists, site-of-infection options — built once from `amrie` reference data at import time |
-| `FilterState` (single tab) | Per browser session / page instance | Selected guidelines, year, breakpoint types, sites of infection |
-| File mode page locals | Per page instance | Uploaded file bytes, progress, cancel flag |
-
-There is no shared mutable interpretation state between users. Each request builds an `InterpretationConfiguration` (or loads one from JSON) and calls engine functions directly.
-
-### Engine boundary
-
-```
-Browser  →  NiceGUI pages / REST API  →  web/helpers.py  →  amrie.*
-```
-
-- **Single tab & REST `/api/interpret/single`:** `make_single_tab_config()` builds config from UI/API fields.
-- **File mode & REST `/api/interpret/file`:** `read_configuration()` loads a full JSON config file (same format as the CLI).
-- **QC tab & REST `/api/qc`:** calls `amrie.qc.get_quality_control_interpretation` directly (no JSON config file).
-
-Blocking engine work runs in `asyncio.to_thread()` so the event loop stays responsive during interpretation.
-
----
-
-## Installation
+## Install and run
 
 ```bash
-# Web UI + REST API dependencies (NiceGUI, httpx)
-pip install -e ".[web]"
-
-# Editable install with both dev tools and web extras
-pip install -e ".[dev,web]"
+pip install -e ".[web]"        # adds nicegui>=2.0 and httpx>=0.27
+amrie-web                      # or: python web/main.py
 ```
 
-The `[web]` optional extra adds `nicegui>=2.0` and `httpx>=0.27`. Core engine dependencies (`pandas`, `typer`, `orjson`) are always installed.
+The server listens on **`http://0.0.0.0:8080`**:
 
----
-
-## Running the server
-
-### Direct
-
-```bash
-python web/main.py
-```
-
-### Console script
-
-After `pip install -e ".[web]"`:
-
-```bash
-amrie-web
-```
-
-Both start the server on **`http://0.0.0.0:8080`**.
-
-| URL | Purpose |
+| URL | What |
 |---|---|
-| `/` | Single interpretation tab |
-| `/file` | Batch file mode |
-| `/qc` | QC evaluation |
-| `/docs` | Interactive OpenAPI (Swagger) |
-| `/api/*` | REST endpoints |
+| `/` | single interpretation page |
+| `/file` | batch file page |
+| `/qc` | QC page |
+| `/docs` | interactive OpenAPI (Swagger) documentation — try every endpoint in the browser |
+| `/api/…` | REST endpoints |
 
-### Docker
+The port is fixed in `web/main.py`. To use another one, run NiceGUI yourself:
 
-```bash
-docker compose up --build
+```python
+# run_web.py
+import web.main                      # registers all pages and API routes
+from nicegui import ui
+ui.run(host="127.0.0.1", port=8765, title="AMRIE Web", storage_secret="change-me",
+       fastapi_docs=True, show=False, reload=False)
 ```
-
-Or build and run manually:
-
-```bash
-docker build -t amrie-web .
-docker run -p 8080:8080 -e STORAGE_SECRET=your-secret amrie-web
-```
-
-See [Deployment](#deployment) for production settings.
 
 ---
 
-## Web UI usage
+## Pages
 
-### Single interpretation (`/`)
+### Single interpretation — `/`
 
-Interpret one organism / antibiotic / measurement combination — equivalent to `amrie single` with UI-driven config.
+The equivalent of `amrie single`, with dropdowns.
 
-1. Select **Organism** and **Antibiotic** from searchable dropdowns.
-2. Choose **Disk** or **MIC / Etest**. Disk mode requires a **Potency** (options depend on selected antibiotic and active guidelines).
-3. Enter the **Measurement** (zone diameter or MIC value).
-4. Set **Filters**: active guidelines (CLSI, EUCAST, SFM), guideline year, optional breakpoint-type and site-of-infection restrictions.
-5. Click **Get interpretations** to see one result per generated WHONET test code (e.g. `PEN_ND10: S`).
+1. **Organism** — searchable list of all organisms (code + name).
+2. **Antibiotic** — searchable list of drugs.
+3. **Disk** or **MIC / E-test**; for disks choose a **potency** (the choices depend on
+   the drug and the active guidelines).
+4. **Measurement** — zone (mm) or MIC (mg/L), modifiers allowed (`<=2`).
+5. **Filters** — guidelines (CLSI, EUCAST, SFM), guideline year, optional
+   breakpoint-type and site-of-infection restrictions.
+6. **Get interpretations** — one line per generated test code, e.g. CLSI and EUCAST
+   selected for ampicillin MIC 8 →
 
-Additional actions (same selections required):
+   ```text
+   AMP_NM: S
+   AMP_EM: S
+   ```
 
-- **Applicable breakpoints** — dialog listing matching breakpoint rows
-- **Applicable expert rules** — ESBL, MRS, ICR, BLNAR, etc.
-- **Applicable intrinsic rules** — expected resistance phenotype rules
+Also on the page:
 
-Optional checkboxes control breakpoint filtering for the dialog actions and whether interpretation comment suffixes (`*`, `!`) appear in results.
+- **Applicable breakpoints** — every breakpoint row that would apply, with S/I/R values;
+- **Applicable expert rules** — the rules that could fire for the organism;
+- **Applicable intrinsic rules** — the expected-resistance rules for the organism;
+- **Include interpretation comments** — show `R*` / `R!` instead of `R`.
 
-### File mode (`/file`)
+### Batch file — `/file`
 
-Batch-process a delimited input file — equivalent to `amrie file`.
+The equivalent of `amrie file`.
 
-1. Upload the **input data file**.
-2. Select the **delimiter** (pipe, comma, semicolon, or tab).
-3. Upload a **configuration JSON** file (required — same schema as CLI `--config`; see [`configuration.md`](configuration.md)).
-4. Set the **Guideline year** for breakpoint lookup during the run.
-5. Click **Interpret**. Progress is shown in batches of 50 rows; **Cancel** stops between batches.
-6. On completion, `interpretations.txt` downloads automatically.
+1. Upload the **data file**.
+2. Pick the **delimiter**: pipe, comma, semicolon or tab.
+3. Upload a **configuration JSON** (same format as the CLI — [Configuration](configuration.md)).
+4. Set the **guideline year** for the run.
+5. **Interpret** — progress is shown in batches of 50 rows; **Cancel** stops between
+   batches. When finished, `interpretations.txt` downloads.
 
-Input/output column conventions match [`data-formats.md`](data-formats.md).
+### Quality control — `/qc`
 
-### Quality control (`/qc`)
-
-Evaluate whether a reference-strain measurement falls within the QC acceptable range — equivalent to `amrie qc`.
-
-> **Note:** QC evaluation is a Python-port extension. It is not present in the original C# AMRIE desktop GUI, but uses the bundled `QC_Ranges.txt` data and the same `interpret_qc_single` / `get_quality_control_interpretation` logic as the CLI.
-
-1. Enter **Reference strain** (e.g. `atcc25922`).
-2. Enter **Antibiotic** as a full WHONET code (e.g. `SAM_ND10`).
-3. Enter the **Measurement**.
-4. Click **Evaluate** — result is `IN`, `OUT`, or blank (uninterpretable).
+Strain (e.g. `atcc25922`), full test code (e.g. `AMP_ND10`), measurement →
+`IN` / `OUT` / blank. See [Quality control](quality-control.md).
 
 ---
 
 ## REST API
 
-Full request/response schemas are available at **`http://localhost:8080/docs`** when the server is running.
+JSON in, JSON out (except the file endpoint). The live schema is at `/docs`.
 
-### Endpoint summary
-
-| Method | Path | Description |
+| Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/api/interpret/single` | Interpret one organism/antibiotic/measurement |
-| `POST` | `/api/interpret/file` | Batch file interpretation (multipart upload) |
-| `POST` | `/api/breakpoints` | Query applicable breakpoints |
-| `POST` | `/api/expert-rules` | Query applicable expert interpretation rules |
-| `POST` | `/api/intrinsic-rules` | Query applicable intrinsic resistance rules |
-| `POST` | `/api/qc` | QC range evaluation |
-| `GET` | `/api/organisms` | All organisms (code + name) |
-| `GET` | `/api/antibiotics` | All antibiotics (code, name, potencies) |
-| `GET` | `/api/guidelines` | Available guideline names |
-| `GET` | `/api/breakpoint-types` | Breakpoint type options |
-| `GET` | `/api/sites` | Sites of infection options |
+| `POST` | `/api/interpret/single` | interpret one organism / drug / value for one or more guidelines |
+| `POST` | `/api/interpret/file` | interpret an uploaded file with an uploaded config |
+| `POST` | `/api/qc` | QC range check |
+| `POST` | `/api/breakpoints` | applicable breakpoints for an organism |
+| `POST` | `/api/expert-rules` | applicable expert rules |
+| `POST` | `/api/intrinsic-rules` | applicable intrinsic resistance rules |
+| `GET` | `/api/organisms` | organism codes and names |
+| `GET` | `/api/antibiotics` | antibiotic codes, names, potencies |
+| `GET` | `/api/guidelines` | guideline names |
+| `GET` | `/api/breakpoint-types` | breakpoint types |
+| `GET` | `/api/sites` | sites of infection, in default priority order |
 
 ### `POST /api/interpret/single`
 
-**Request body** (`SingleInterpretRequest`):
+You give the **base drug code**, the method and (for disks) the potency; the server
+builds the WHONET test code for each guideline you list (`PEN` + CLSI + disk + 10 →
+`PEN_ND10`).
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `organism_code` | string | — | WHONET organism code (e.g. `ent`) |
-| `whonet_abx_code` | string | — | Base antibiotic code (e.g. `PEN`) |
-| `measurement` | string | — | Zone diameter or MIC value |
-| `guidelines` | string[] | `["CLSI"]` | Active guidelines |
-| `test_method` | `"disk"` \| `"mic"` | `"disk"` | Test method |
-| `potency` | string | `""` | Disk potency (required for disk; e.g. `10units`) |
-| `guideline_year` | integer | — | Breakpoint table year |
-| `include_comments` | boolean | `false` | Include `*` / `!` suffixes |
-| `restrict_breakpoint_types` | boolean | `false` | Limit to `breakpoint_types` |
-| `breakpoint_types` | string[] | `[]` | e.g. `["Human"]` |
-| `restrict_sites` | boolean | `false` | Limit to `sites_of_infection` |
-| `sites_of_infection` | string[] | `[]` | Site filter values |
+| `organism_code` | string | — | WHONET organism code (`ent`, `eco`, …) |
+| `whonet_abx_code` | string | — | drug code (`PEN`, `AMP`, …) |
+| `measurement` | string | — | zone or MIC, modifiers allowed |
+| `guideline_year` | integer | — | breakpoint year |
+| `guidelines` | string[] | `["CLSI"]` | any of `CLSI`, `EUCAST`, `SFM` |
+| `test_method` | `"disk"` \| `"mic"` | `"disk"` | |
+| `potency` | string | `""` | disk potency: `10`, `10µg`, `10units`, `1.25/23.75µg` are all accepted |
+| `include_comments` | boolean | `false` | return `R*` / `R!` instead of `R` |
+| `restrict_breakpoint_types` | boolean | `false` | when `false`, Human breakpoints only |
+| `breakpoint_types` | string[] | `[]` | used when `restrict_breakpoint_types` is `true` |
+| `restrict_sites` | boolean | `false` | |
+| `sites_of_infection` | string[] | `[]` | site priority when `restrict_sites` is `true` |
 
-**Response** (`SingleInterpretResponse`):
-
-```json
-{
-  "results": [
-    { "whonet_test": "PEN_ND10", "interpretation": "S" }
-  ]
-}
-```
-
-**Example** — *Enterococcus* (`ent`), penicillin disk 10 units, measurement 19 mm → susceptible (`S`):
+**Example — *Enterococcus*, penicillin 10-unit disk, 19 mm:**
 
 ```bash
 curl -s -X POST http://localhost:8080/api/interpret/single \
   -H "Content-Type: application/json" \
-  -d '{
-    "organism_code": "ent",
-    "whonet_abx_code": "PEN",
-    "measurement": "19",
-    "guidelines": ["CLSI"],
-    "test_method": "disk",
-    "potency": "10units",
-    "guideline_year": 2026
-  }'
+  -d '{"organism_code": "ent", "whonet_abx_code": "PEN", "measurement": "19",
+       "guidelines": ["CLSI"], "test_method": "disk", "potency": "10", "guideline_year": 2026}'
 ```
+
+```json
+{"results":[{"whonet_test":"PEN_ND10","interpretation":"S"}]}
+```
+
+**Two guidelines at once — *E. coli*, ampicillin MIC 8:**
+
+```bash
+curl -s -X POST http://localhost:8080/api/interpret/single \
+  -H "Content-Type: application/json" \
+  -d '{"organism_code": "eco", "whonet_abx_code": "AMP", "measurement": "8",
+       "guidelines": ["CLSI", "EUCAST"], "test_method": "mic", "guideline_year": 2026}'
+```
+
+```json
+{"results":[{"whonet_test":"AMP_NM","interpretation":"S"},{"whonet_test":"AMP_EM","interpretation":"S"}]}
+```
+
+**Comments — *K. pneumoniae*, ampicillin 25 mm:**
+
+| `include_comments` | response `interpretation` |
+|---|---|
+| `false` | `"R"` |
+| `true` | `"R*"` |
+
+Expert rules are all enabled for this endpoint, but it interprets one drug at a time;
+to see a rule's effect across a panel, use the file endpoint.
 
 ### `POST /api/interpret/file`
 
-Multipart form upload:
+`multipart/form-data`:
 
 | Field | Type | Description |
 |---|---|---|
-| `data_file` | file | Input delimited data file |
-| `config_file` | file | Configuration JSON |
-| `delimiter` | string | `\|`, `,`, `;`, or `TAB` |
-| `guideline_year` | integer | Breakpoint year for the run |
+| `data_file` | file | the input data |
+| `config_file` | file | the configuration JSON |
+| `delimiter` | string | `|`, `,`, `;` or `TAB` (default `|`) |
+| `guideline_year` | integer | breakpoint year for this run (overrides the config) |
 
-Returns the interpreted output file as `text/tab-separated-values` with `Content-Disposition: attachment; filename=interpretations.txt`.
+```bash
+curl -s -X POST http://localhost:8080/api/interpret/file \
+  -F data_file=@isolates.txt \
+  -F config_file=@src/amrie/resources/SampleConfig.json \
+  -F delimiter='|' -F guideline_year=2026
+```
+
+Response: `text/tab-separated-values`, `Content-Disposition: attachment; filename=interpretations.txt`:
+
+```text
+ORGANISM	SPEC_TYPE	AMP_ND10	AMP_ND10_INTERP	CTX_ND30	CTX_ND30_INTERP	CIP_NM	CIP_NM_INTERP	FOX_ND30	FOX_ND30_INTERP	PEN_ND10	PEN_ND10_INTERP
+eco	ur	19	S	20	R	0.5	I
+kpn	bl	25	R	30	S	<=0.25	S
+sau	wd					1	S	15	R	35	R
+```
+
+An unsupported delimiter is rejected with **HTTP 400**:
+
+```bash
+curl -s -w ' HTTP %{http_code}\n' -X POST http://localhost:8080/api/interpret/file \
+  -F data_file=@isolates.txt -F config_file=@src/amrie/resources/SampleConfig.json \
+  -F delimiter='pipe' -F guideline_year=2026
+```
+
+```text
+{"detail":"Unsupported delimiter token. Supported delimiters are TAB, comma (,), semicolon (;), and pipe (|); provide TAB or exactly one character."} HTTP 400
+```
 
 ### `POST /api/qc`
 
-**Request:**
+| Field | Type | Default |
+|---|---|---|
+| `strain` | string | — |
+| `antibiotic` | string (full test code) | — |
+| `measurement` | string | — |
+| `round_half_dilutions` | boolean | `true` |
+
+```bash
+curl -s -X POST http://localhost:8080/api/qc -H "Content-Type: application/json" \
+  -d '{"strain": "atcc25922", "antibiotic": "AMP_ND10", "measurement": "18"}'
+```
+
+```json
+{"result":"IN"}
+```
+
+### `POST /api/breakpoints`
+
+All applicable breakpoint rows for an organism, optionally restricted.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `strain` | string | — | Reference strain code |
-| `antibiotic` | string | — | Full WHONET antibiotic code |
-| `measurement` | string | — | Measured value |
-| `round_half_dilutions` | boolean | `true` | Round half-dilution MIC values |
+| `organism_code` | string | — | |
+| `restrict_guidelines` / `prioritized_guidelines` | bool / string[] | `false` / `null` | |
+| `restrict_years` / `prioritized_guideline_years` | bool / int[] | `false` / `null` | |
+| `restrict_breakpoint_types` / `prioritized_breakpoint_types` | bool / string[] | `false` / `null` | |
+| `restrict_sites` / `prioritized_sites_of_infection` | bool / string[] | `false` / `null` | |
+| `restrict_drugs` | bool | `false` | when `true`, build test codes from the next three fields |
+| `whonet_abx_code`, `test_method`, `potency` | string | | drug for `restrict_drugs` |
+| `guidelines_for_drugs` | string[] | `[]` | guidelines used to build the test codes |
+| `user_defined_breakpoints` | list | `[]` | |
 
-**Response:** `{ "result": "IN" }` (or `"OUT"` / `""`).
+```bash
+curl -s -X POST http://localhost:8080/api/breakpoints -H "Content-Type: application/json" -d '{
+  "organism_code": "eco",
+  "restrict_guidelines": true, "prioritized_guidelines": ["CLSI"],
+  "restrict_years": true, "prioritized_guideline_years": [2026],
+  "restrict_drugs": true, "whonet_abx_code": "AMP", "test_method": "disk", "potency": "10",
+  "guidelines_for_drugs": ["CLSI"]}'
+```
 
-### `POST /api/breakpoints`, `/api/expert-rules`, `/api/intrinsic-rules`
+```json
+{"breakpoints": [
+  {"GUIDELINES": "CLSI", "YEAR": 2026, "BREAKPOINT_TYPE": "Human", "HOST": "Human",
+   "SITE_OF_INFECTION": "", "WHONET_TEST": "AMP_ND10", "R": "13", "I": "14-16", "S": "17",
+   "ECV_ECOFF": "0", "ORGANISM_CODE": "EBC", "ORGANISM_CODE_TYPE": "FAMILY_CODE", "COMMENTS": "…"},
+  …4 rows (Human, 2 × Animal, ECOFF)
+]}
+```
 
-See field definitions in `web/models/requests.py` and the `/docs` schema. Responses wrap lists of breakpoint or rule dictionaries.
+### `POST /api/expert-rules`
 
-### Reference `GET` endpoints
+| Field | Type | Description |
+|---|---|---|
+| `organism_code` | string | |
+| `full_test_codes` | string[] | the isolate's columns (antibiotic and other tests) |
 
-Return JSON arrays used to populate UI dropdowns programmatically:
+```bash
+curl -s -X POST http://localhost:8080/api/expert-rules -H "Content-Type: application/json" \
+  -d '{"organism_code": "sau", "full_test_codes": ["FOX_ND30", "PEN_ND10", "OXA_SCREEN"]}'
+```
 
-- `/api/organisms` → `[{ "code": "ent", "name": "Enterococcus spp." }, ...]`
-- `/api/antibiotics` → `[{ "code": "PEN", "name": "Penicillin G", "potencies": ["10units", ...] }, ...]`
-- `/api/guidelines`, `/api/breakpoint-types`, `/api/sites` → string arrays
+```json
+{"rules": [
+  {"RULE_CODE": "MRS", "DESCRIPTION": "Methicillin-resistant Staphylococcus:  MRS = Positive",
+   "ORGANISM_CODE": "STA", "ORGANISM_CODE_TYPE": "GENUS_CODE",
+   "RULE_CRITERIA": "MECA_PCR=+; MRSA=+; OXA_SCREEN=+; MRSA_SCRN=+; PBP2A_AGGL=+",
+   "AFFECTED_ANTIBIOTICS": "AMC, APX, CRB, … (140 codes)", "ANTIBIOTIC_EXCEPTIONS": "CPT, BPR"},
+  {"RULE_CODE": "MRS", "DESCRIPTION": "Methicillin-resistant Staphylococcus:  Oxacillin or cefoxitin = Non-susceptible",
+   "RULE_CRITERIA": "OXA=NS; FOX=NS", "…": "…"}
+]}
+```
+
+### `POST /api/intrinsic-rules`
+
+| Field | Type | Default |
+|---|---|---|
+| `organism_code` | string | — |
+| `restrict_guidelines` | bool | `false` |
+| `guidelines` | string[] | `null` |
+
+```bash
+curl -s -X POST http://localhost:8080/api/intrinsic-rules -H "Content-Type: application/json" \
+  -d '{"organism_code": "kpn", "restrict_guidelines": true, "guidelines": ["CLSI"]}'
+```
+
+```json
+{"rules": [
+  {"GUIDELINE": "CLSI", "REFERENCE_TABLE": "Enterobacterales", "ORGANISM_CODE": "kpn",
+   "ORGANISM_CODE_TYPE": "WHONET_ORG_CODE", "ABX_CODE": "AMP", "ABX_CODE_TYPE": "WHONET_ABX_CODE",
+   "ANTIBIOTIC_EXCEPTIONS": "", "COMMENTS": ""},
+  …16 rules
+]}
+```
+
+### Reference lists
+
+```bash
+curl -s http://localhost:8080/api/guidelines          # ["CLSI","EUCAST","SFM"]
+curl -s http://localhost:8080/api/breakpoint-types    # ["Human","Animal","ECOFF"]
+curl -s http://localhost:8080/api/sites               # ["Non-meningitis","Non-endocarditis","Parenteral","(Blank)", …31]
+curl -s http://localhost:8080/api/organisms           # 2,980 × {"code": "saj", "name": "Abiotrophia adiacens"}
+curl -s http://localhost:8080/api/antibiotics         # {"code": "AMP", "name": "Ampicillin", "potencies": ["2µg","10µg"]}, …
+```
+
+`/api/antibiotics` returns one entry per row of `Antibiotics.txt`, so a drug listed in
+several rows appears several times — de-duplicate by `code` if you build a picker.
 
 ---
 
-## Configuration
+## Calling the API from Python
 
-The web app uses two configuration paths, matching the CLI modes:
+```python
+import httpx
 
-### Single tab — `make_single_tab_config()`
+api = httpx.Client(base_url="http://localhost:8080", timeout=60)
 
-Used by the Single UI tab and `/api/interpret/single`. Builds an `InterpretationConfiguration` in memory from filter controls:
+r = api.post("/api/interpret/single", json={
+    "organism_code": "kpn", "whonet_abx_code": "AMP", "measurement": "25",
+    "guidelines": ["CLSI"], "test_method": "disk", "potency": "10",
+    "guideline_year": 2026, "include_comments": True,
+})
+r.json()      # {'results': [{'whonet_test': 'AMP_ND10', 'interpretation': 'R*'}]}
 
-| UI / API field | Config mapping |
+with open("isolates.txt", "rb") as data, open("src/amrie/resources/SampleConfig.json", "rb") as cfg:
+    r = api.post("/api/interpret/file",
+                 files={"data_file": data, "config_file": cfg},
+                 data={"delimiter": "|", "guideline_year": "2026"})
+r.raise_for_status()
+open("results.txt", "w").write(r.text)
+```
+
+---
+
+## How the web layer configures the engine
+
+| Entry point | Configuration |
 |---|---|
-| Guideline year | `guideline_year` |
-| Include interpretation comments | `include_interpretation_comments` |
-| Restrict breakpoint types + selected types | `prioritized_breakpoint_types` (defaults to `["Human"]` when unrestricted) |
-| Restrict sites + selected sites | `prioritized_sites_of_infection` (`None` when unrestricted) |
-| — | `enabled_expert_interpretation_rules=None` (all rules enabled) |
+| single page, `/api/interpret/single` | built in memory by `make_single_tab_config()`: chosen year; Human breakpoints unless restricted; chosen sites or the default order; **all** expert rules; intrinsic rules on; comments as requested |
+| file page, `/api/interpret/file` | the uploaded JSON (`read_configuration`) — the request's `guideline_year` overrides `GuidelineYear` |
+| QC page, `/api/qc` | no configuration; bundled `QC_Ranges.txt` |
+| breakpoint / rule lookups | the request fields only |
 
-Guideline selection (CLSI / EUCAST / SFM) affects which WHONET test codes are generated via `build_full_test_codes()`, not the JSON config file.
+The single page and endpoint strip `*` / `!` unless *Include interpretation comments*
+/ `include_comments` is set — the same behaviour as `amrie single`.
 
-### File mode — `read_configuration()`
+---
 
-Used by the File UI tab and `/api/interpret/file`. Loads a full JSON config file with the same keys documented in [`configuration.md`](configuration.md) (`GuidelineYear`, `PrioritizedBreakpointTypes`, `EnabledExpertInterpretationRules`, `HorizontalAntibioticResults`, etc.).
+## Architecture
 
-Use [`src/amrie/resources/SampleConfig.json`](../src/amrie/resources/SampleConfig.json) as a starting point.
+```text
+browser ──► NiceGUI page (web/pages/*)     ─┐
+client  ──► FastAPI route (web/api/*)      ─┼─► web/helpers.py ─► amrie (engine)
+                                            ┘
+```
 
-### QC
+```text
+web/
+├── main.py            imports every page/API module, then ui.run() on :8080
+├── state.py           read-only lookup lists built once at import (organisms, drugs, sites…)
+├── helpers.py         config builders, WHONET code builder, serialisers, interpret_for_display
+├── api/               interpret.py · breakpoints.py · rules.py · qc.py · reference.py
+├── pages/             single.py (/) · file_mode.py (/file) · qc.py (/qc)
+├── components/        header, filters, breakpoint / expert / intrinsic dialogs
+└── models/            requests.py, responses.py (Pydantic)
+```
 
-No configuration file. QC uses bundled `QC_Ranges.txt` data directly.
+- Engine calls run in `asyncio.to_thread`, so a long file does not block other users.
+- There is no shared mutable state between requests; every request builds or loads
+  its own configuration. The engine's caches key on the full configuration, so one
+  user's settings can never leak into another's results.
+- Reference data is loaded once at start-up (~1 s) and shared read-only.
 
 ---
 
 ## Deployment
 
-### Dockerfile
+### Docker
 
-The included `Dockerfile`:
+```bash
+docker compose up --build             # uses docker-compose.yml
+# or
+docker build -t amrie-web .
+docker run -p 8080:8080 -e STORAGE_SECRET="$(openssl rand -hex 32)" amrie-web
+```
 
-1. Uses `python:3.11-slim`
-2. Copies `pyproject.toml`, `src/`, and `web/`
-3. Runs `pip install -e ".[web]"`
-4. Exposes port **8080**
-5. Starts with `python web/main.py`
+The image (`python:3.11-slim`) copies `src/` and `web/`, installs `.[web]` and runs
+`python web/main.py` on port 8080. The `amrie` CLI is available inside the container
+too ([CLI → Docker](cli-reference.md#docker)).
 
-### Environment variables
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `STORAGE_SECRET` | `amrie-dev-secret` | NiceGUI session storage signing key — **set a strong random value in production** |
-
-Example `docker-compose.yml`:
+`docker-compose.yml`:
 
 ```yaml
 services:
@@ -339,23 +416,19 @@ services:
     restart: unless-stopped
 ```
 
-### Production notes
+### Environment
 
-- Place a reverse proxy (nginx, Caddy, etc.) in front of the container for TLS termination.
-- The server binds to `0.0.0.0:8080` inside the container.
-- Engine reference data is bundled in the package; no external database is required.
-- For high-volume batch API use, consider the CLI (`amrie file`) or Python API (`interpret_file`) to avoid HTTP upload overhead.
+| Variable | Default | Purpose |
+|---|---|---|
+| `STORAGE_SECRET` | `amrie-dev-secret` | signs NiceGUI session storage — **set a long random value in production** |
 
----
+### Production checklist
 
-## Related documentation
-
-| Document | Contents |
-|---|---|
-| [`configuration.md`](configuration.md) | JSON config file reference (file mode) |
-| [`data-formats.md`](data-formats.md) | Input/output file column conventions |
-| [`cli-reference.md`](cli-reference.md) | Equivalent CLI commands |
-| [`architecture.md`](architecture.md) | Engine module structure and data flow |
-| [`use-cases.md`](use-cases.md) | Python API examples |
-
-Implementation plan (developer reference, not user guide): [`ui-plan.md`](../ui-plan.md).
+- Put a reverse proxy (nginx, Caddy, Traefik) in front for TLS.
+- Set `STORAGE_SECRET`.
+- The app has **no authentication**; restrict access at the proxy or network level if
+  it handles patient data.
+- Uploaded files are written to a temporary directory for the duration of the request
+  and deleted afterwards.
+- For very large or frequent batch jobs, the CLI or Python API avoids HTTP upload
+  overhead.

@@ -100,24 +100,24 @@ def load_quality_control_ranges(qc_table_file: str | Path | None = None) -> list
     header_map = get_resource_headers(list(df.columns))
     ranges: list[QualityControlRange] = []
 
-    for _, row in df.iterrows():
+    for row in df.itertuples(index=False, name=None):
         ranges.append(
             QualityControlRange(
-                GUIDELINE=row.iloc[header_map["GUIDELINE"]],
-                YEAR=_parse_int(row.iloc[header_map["YEAR"]]),
-                STRAIN=row.iloc[header_map["STRAIN"]],
-                REFERENCE_TABLE=row.iloc[header_map["REFERENCE_TABLE"]],
-                WHONET_ORG_CODE=row.iloc[header_map["WHONET_ORG_CODE"]],
-                ANTIBIOTIC=row.iloc[header_map["ANTIBIOTIC"]],
-                ABX_TEST=row.iloc[header_map["ABX_TEST"]],
-                WHONET_ABX_CODE=row.iloc[header_map["WHONET_ABX_CODE"]],
-                METHOD=row.iloc[header_map["METHOD"]],
-                MEDIUM=row.iloc[header_map["MEDIUM"]],
-                MINIMUM=_parse_decimal(row.iloc[header_map["MINIMUM"]]),
-                MAXIMUM=_parse_decimal(row.iloc[header_map["MAXIMUM"]]),
-                DATE_ENTERED=_parse_date(row.iloc[header_map["DATE_ENTERED"]]),
-                DATE_MODIFIED=_parse_date(row.iloc[header_map["DATE_MODIFIED"]]),
-                COMMENTS=row.iloc[header_map["COMMENTS"]],
+                GUIDELINE=row[header_map["GUIDELINE"]],
+                YEAR=_parse_int(row[header_map["YEAR"]]),
+                STRAIN=row[header_map["STRAIN"]],
+                REFERENCE_TABLE=row[header_map["REFERENCE_TABLE"]],
+                WHONET_ORG_CODE=row[header_map["WHONET_ORG_CODE"]],
+                ANTIBIOTIC=row[header_map["ANTIBIOTIC"]],
+                ABX_TEST=row[header_map["ABX_TEST"]],
+                WHONET_ABX_CODE=row[header_map["WHONET_ABX_CODE"]],
+                METHOD=row[header_map["METHOD"]],
+                MEDIUM=row[header_map["MEDIUM"]],
+                MINIMUM=_parse_decimal(row[header_map["MINIMUM"]]),
+                MAXIMUM=_parse_decimal(row[header_map["MAXIMUM"]]),
+                DATE_ENTERED=_parse_date(row[header_map["DATE_ENTERED"]]),
+                DATE_MODIFIED=_parse_date(row[header_map["DATE_MODIFIED"]]),
+                COMMENTS=row[header_map["COMMENTS"]],
             )
         )
     return ranges

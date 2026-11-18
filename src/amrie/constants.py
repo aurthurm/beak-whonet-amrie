@@ -4,6 +4,7 @@ Port of Constants.cs. All values are kept as close to the original as possible s
 that cross-referencing C# source remains straightforward.
 """
 
+import unicodedata
 from decimal import Decimal
 
 BREAKPOINT_TABLE_REVISION_YEAR = 2026
@@ -60,9 +61,59 @@ class Delimiters:
 
     TAB_CHAR = "\t"
     COMMA_CHAR = ","
+    SEMICOLON_CHAR = ";"
+    PIPE_CHAR = "|"
     UNDERSCORE = "_"
     SPACE = " "
     EQUALS_SIGN = "="
+
+    SUPPORTED_FILE_DELIMITERS = (TAB_CHAR, COMMA_CHAR, SEMICOLON_CHAR, PIPE_CHAR)
+    """Delimiters accepted for user data files (port of ``ValidateFileDelimiter``)."""
+
+    _UNSUPPORTED_TOKEN_MESSAGE = (
+        "Unsupported delimiter token. Supported delimiters are TAB, comma (,), "
+        "semicolon (;), and pipe (|); provide TAB or exactly one character."
+    )
+
+    @staticmethod
+    def validate_file_delimiter(delimiter: str) -> None:
+        """Raise :exc:`ValueError` unless *delimiter* is TAB, ``,``, ``;`` or ``|``.
+
+        Port of ``Constants.Delimiters.ValidateFileDelimiter``.
+        """
+        if delimiter not in Delimiters.SUPPORTED_FILE_DELIMITERS:
+            if len(delimiter) != 1:
+                requested = repr(delimiter)
+            elif unicodedata.category(delimiter) == "Cc":
+                requested = f"U+{ord(delimiter):04X}"
+            else:
+                requested = f"'{delimiter}' (U+{ord(delimiter):04X})"
+            raise ValueError(
+                f"Unsupported file delimiter {requested}. "
+                "Supported delimiters are TAB, comma (,), semicolon (;), and pipe (|)."
+            )
+
+    @staticmethod
+    def parse_file_delimiter_token(delimiter_token: str) -> str:
+        """Convert a CLI delimiter token to a supported single-character delimiter.
+
+        Port of ``Constants.Delimiters.ParseFileDelimiterToken``. ``"TAB"`` maps to
+        a tab character; matching is case-insensitive (a deliberate difference from
+        the C# port, kept for the existing CLI behaviour). Otherwise the token must
+        be exactly one character and a supported delimiter.
+
+        Raises:
+            TypeError: If *delimiter_token* is ``None``.
+            ValueError: If the token is not ``TAB`` or a supported single character.
+        """
+        if delimiter_token is None:
+            raise TypeError("delimiter_token must not be None")
+        if delimiter_token.upper() == Delimiters.TAB_PLACEHOLDER:
+            return Delimiters.TAB_CHAR
+        if len(delimiter_token) != 1:
+            raise ValueError(Delimiters._UNSUPPORTED_TOKEN_MESSAGE)
+        Delimiters.validate_file_delimiter(delimiter_token)
+        return delimiter_token
 
 
 class CommandLineModes:

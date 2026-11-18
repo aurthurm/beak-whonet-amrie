@@ -40,13 +40,13 @@ Groups: (optional ``<``/``>``)(optional ``=``)(integer or decimal).
 
 _GUIDELINE_PATTERN = "|".join(re.escape(c) for c in "NEFSDTBA")
 VALID_ANTIBIOTIC_FIELD_NAME_REGEX = re.compile(
-    rf"^([A-Z]{{3}}|X_\d+)_({_GUIDELINE_PATTERN})(D.*|M|E)$",
+    rf"^([A-Z]{{3}}|X_[1-9]\d?)_({_GUIDELINE_PATTERN})(D.*|M|E)$",
     re.IGNORECASE,
 )
 """Matches a complete WHONET antibiotic column name (e.g. ``"AMP_ND10"``, ``"X_1_NM"``)."""
 
 VALID_ANTIBIOTIC_CODE_REGEX = re.compile(
-    r"^([A-Z]{3}|X_\d+)$",
+    r"^([A-Z]{3}|X_[1-9]\d?)$",
     re.IGNORECASE,
 )
 """Matches only the drug-code portion of a WHONET column name (e.g. ``"AMP"``)."""
@@ -73,17 +73,44 @@ class AntibioticComponents:
                 (e.g. ``"AMP_ND10"``, ``"PEN_EM"``, ``"X_1_NM"``).
 
         Raises:
-            ValueError: If the embedded guideline or test-method code is not
-                recognised.
+            ValueError: If the name is ``None``, has fewer than two components, a
+                user-defined number is not ``X_#`` or ``X_##`` (1-99, no leading
+                zero), the guideline+method part is shorter than two characters,
+                or the embedded guideline or test-method code is not recognised.
         """
+        if whonet_antibiotic_full_code is None:
+            raise ValueError("Antibiotic test code must not be None.")
+
         abx_components = split_line(whonet_antibiotic_full_code, C.Delimiters.UNDERSCORE)
+        if len(abx_components) < 2:
+            raise ValueError(f"Invalid antibiotic test code format '{whonet_antibiotic_full_code}'.")
+
         self.code = abx_components[0]
 
-        if self.code == _USER_DEFINED_ANTIBIOTIC:
-            self.code = to_line([abx_components[0], abx_components[1]], C.Delimiters.UNDERSCORE)
+        if self.code.upper() == _USER_DEFINED_ANTIBIOTIC:
+            # WHONET restriction: user-defined number must be X_# or X_## (1-99, no leading zero).
+            number = abx_components[1]
+            if (
+                len(abx_components) < 3
+                or len(number) < 1
+                or len(number) > 2
+                or number[0] not in "123456789"
+                or (len(number) == 2 and number[1] not in "0123456789")
+            ):
+                raise ValueError(
+                    f"Invalid user-defined antibiotic test code '{whonet_antibiotic_full_code}'. "
+                    "User-defined antibiotics must follow the pattern X_# or X_## "
+                    "(e.g., X_1 or X_12)."
+                )
+
+            self.code = to_line([abx_components[0], number], C.Delimiters.UNDERSCORE)
+            if len(abx_components[2]) < 2:
+                raise ValueError(f"Missing guideline and test method in '{whonet_antibiotic_full_code}'.")
             guideline_code = abx_components[2][0]
             self.test_method = TestMethods.get_test_method_from_code(abx_components[2][1])
         else:
+            if len(abx_components[1]) < 2:
+                raise ValueError(f"Missing guideline and test method in '{whonet_antibiotic_full_code}'.")
             guideline_code = abx_components[1][0]
             self.test_method = TestMethods.get_test_method_from_code(abx_components[1][1])
 

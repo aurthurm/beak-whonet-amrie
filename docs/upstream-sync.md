@@ -4,7 +4,10 @@ This file records which commit of the upstream C# AMRIE project was used as the
 basis for each change to this Python port. When the C# project is updated, start
 your diff from the **"Last synced commit"** below to find only the new changes.
 
-**Upstream repository:** https://github.com/AClark-WHONET/AMRIE
+**Upstream repository:** https://github.com/WHONET-Development/AMRIE
+(formerly `AClark-WHONET/AMRIE`; GitHub redirects the old URL)
+
+**This port:** https://github.com/aurthurm/beak-whonet-amrie
 
 ---
 
@@ -12,13 +15,13 @@ your diff from the **"Last synced commit"** below to find only the new changes.
 
 | Field | Value |
 |---|---|
-| **Last synced commit** | `69de20193a5508e153631fa8bdd46c27baadcb40` |
-| **Short hash** | `69de201` |
-| **Date** | 2026-05-19 |
-| **Author** | AClark (`aclark@whonet.org`) |
-| **Commit message** | Removes EUCAST SXT and TMP breakpoints for Enterococcus spp. which have been replaced by a note. |
-| **Synced on** | 2026-05-30 |
-| **Synced by** | Initial Python port |
+| **Last synced commit** | `99acabc2251c6f5c2a13f9ec285814a59913b81a` |
+| **Short hash** | `99acabc` |
+| **Date** | 2026-11-18 |
+| **Author** | WHONET-Development |
+| **Commit message** | Relative paths used instead of absolute. |
+| **Synced on** | 2026-11-18 |
+| **Synced by** | Upstream sync `69de201..99acabc` |
 
 ---
 
@@ -29,17 +32,20 @@ your diff from the **"Last synced commit"** below to find only the new changes.
 cd /path/to/AMRIE
 
 # Show everything after the last synced commit
-git log 69de201..HEAD --oneline
+git log 99acabc..HEAD --oneline
 
 # Show only changes to source files (ignore installer / CI / docs)
-git log 69de201..HEAD --oneline -- \
-  "Interpretation Engine/" \
-  "Interpretation CLI/"
+git log 99acabc..HEAD --oneline -- \
+  "AMRIE.Library/" \
+  "AMRIE.CLI/" \
+  "AMRIE.Library.Tests/"
 
 # Full diff of interpretation logic since last sync
-git diff 69de201..HEAD -- \
-  "Interpretation Engine/" \
-  "Interpretation CLI/"
+# Use -M to follow the 2026-11 folder renames and -w to skip syntax-only churn
+git diff -M -w --ignore-cr-at-eol 99acabc..HEAD -- \
+  "AMRIE.Library/" \
+  "AMRIE.CLI/" \
+  "AMRIE.Library.Tests/"
 ```
 
 ---
@@ -51,6 +57,19 @@ Each entry records what changed in the C# project and what was done in this port
 | Date | C# commit range | Summary | Python files changed |
 |---|---|---|---|
 | 2026-05-30 | — (initial port) | Full 1:1 port of the C# engine at `69de201` | All `src/amrie/*.py` files |
+| 2026-11-18 | `69de201..99acabc` | Ported `d752848` engine-correctness fixes: `ALL`/`ALL` organism breakpoints now match (320 PK/PD rows: EUCAST 2013–2020, SFM 2020; the 195 EUCAST 2022–2026 rows coded `ALL`/`Gen` are not matched, as upstream); breakpoint `ORGANISM_CODE_TYPE` resolved at load (104 `BS-`, 77 `NME` rows); expected-resistance `ABX_CODE_TYPE` resolved at load (J01DB, GEN, GEH); breakpoint cache keyed on full selection (types/sites/user BPs); `RoundHalfDilutions` honoured in batch + single; user-defined antibiotics restricted to `X_1`–`X_99` with C# `ShortCode`; expert-rule drug matching by short code; RFC-style `split_line`/`to_line`; delimiters limited to TAB `,` `;` `\|`; config JSON accepts `$schema`, comments, trailing commas, case-insensitive keys. Data: `Organisms.txt` (*Candidozyma*). Bug already fixed in port: AFA column. Not ported: GUIs, data generator, perf `BoundedCache`. | `breakpoint.py`, `expected_resistance.py`, `antibiotic_rules.py`, `isolate.py`, `io_library.py`, `parsing.py`, `antibiotic.py`, `expert_rule.py`, `config.py`, `io_utils.py`, `constants.py`, `cli.py`, `web/api/interpret.py`, `resources/Organisms.txt`, `resources/SampleConfig.json`, `docs/reference/amrie-config.schema.json`, `tests/test_sync_*.py` |
+| 2026-11-18 | follow-ups | Bounded FIFO caches (port of `BoundedCache.cs`); resource loaders 7× faster (`itertuples`); UTF-8 BOM in input files ignored (C# parity); web single tab / REST `include_comments` now honoured; documentation rewritten with verified examples (`tests/test_doc_examples.py`). | `bounded_cache.py`, `antibiotic_rules.py`, loaders, `io_library.py`, `web/helpers.py`, `web/api/interpret.py`, `web/pages/single.py`, `docs/`, `README.md` |
+
+---
+
+## Deliberate differences
+
+Behaviour that intentionally differs from upstream is listed in
+[architecture.md → deliberate differences](architecture.md#deliberate-differences-from-c).
+Known upstream behaviours kept for parity (documented, not "fixed"): `ALL`/`Gen`
+PK/PD rows unmatched; rows shorter than the header skipped; relative
+`UserDefinedBreakpointsFile` paths resolved against the program directory and missing
+files ignored; veterinary breakpoints chosen by alphabetical host.
 
 ---
 
@@ -61,15 +80,20 @@ When upstream commits are detected, follow these steps:
 ### 1. Identify the relevant commits
 
 ```bash
-git log 69de201..HEAD --oneline -- "Interpretation Engine/" "Interpretation CLI/"
+git log 99acabc..HEAD --oneline -- "AMRIE.Library/" "AMRIE.CLI/" "AMRIE.Library.Tests/"
 ```
 
 Focus on files that map to Python logic (see
 [C# → Python mapping](architecture.md#c--python-mapping)). Ignore:
 
-- `AMR Interpretation Engine Windows Installer/` — no Python equivalent
-- `Interpretation Interface/` — GUI only, not ported
+- `AMRIE.WinForms*/`, `AMRIE.WinUI*/`, `AMRIE.Desktop/` — GUIs and installers, not ported
+- `AMRIE.Library.DataGenerator/` — useful for parity fixtures, not ported
+- `.agent-index/`, `.agents/`, `docs/`, `licenses/` — upstream tooling and docs
 - `.github/`, `*.yml` — CI/packaging, not ported
+
+> **Folder rename (Nov 2026):** `Interpretation Engine/` → `AMRIE.Library/`,
+> `Interpretation CLI/` → `AMRIE.CLI/`, namespace `AMR_Engine` → `AMRIE.Library`.
+> Resource files under `Resources/` use CRLF line endings — keep ours CRLF when copying.
 
 ### 2. Apply the change
 
@@ -104,5 +128,5 @@ Key things to check:
 Update the **Current sync state** table at the top of this document with the new commit hash, date, and summary. Append a row to the **Sync log** table.
 
 ```markdown
-| 2026-XX-XX | 69de201..NEWHASH | Brief description | e.g. breakpoint.py, constants.py |
+| 2026-XX-XX | 99acabc..NEWHASH | Brief description | e.g. breakpoint.py, constants.py |
 ```

@@ -18,6 +18,7 @@ matching, so a single rule can cover an entire drug class.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -67,6 +68,38 @@ def _parse_date(value: str) -> datetime:
     return datetime.fromisoformat(value.strip())
 
 
+def resolve_antibiotic_code_type(
+    antibiotic_code: str,
+    declared_code_type: str,
+    antibiotics: Sequence[Antibiotic] | None = None,
+) -> str:
+    """Return the effective ``ABX_CODE_TYPE`` for a rule's antibiotic key.
+
+    Port of ``ResolveAntibioticCodeType`` in ``ExpectedResistancePhenotypeRule.cs``.
+    The declared type is kept when it matches the catalogue; otherwise the type
+    that matches uniquely is used.
+
+    Raises:
+        ValueError: If the key matches both or neither code type and the declared
+            type is not confirmed (C# ``InvalidDataException``).
+    """
+    catalogue = ALL_ANTIBIOTICS if antibiotics is None else antibiotics
+    matches_whonet = any(a.WHONET_ABX_CODE == antibiotic_code for a in catalogue)
+    matches_atc = any((a.ATC_CODE or "").startswith(antibiotic_code) for a in catalogue)
+
+    if (declared_code_type == "WHONET_ABX_CODE" and matches_whonet) or (
+        declared_code_type == "ATC_CODE" and matches_atc
+    ):
+        return declared_code_type
+
+    if matches_whonet == matches_atc:
+        raise ValueError(
+            f"The antibiotic key '{antibiotic_code}' with type '{declared_code_type}' cannot be resolved uniquely."
+        )
+
+    return "WHONET_ABX_CODE" if matches_whonet else "ATC_CODE"
+
+
 def _load_rules(path: Path | None = None) -> list[ExpectedResistancePhenotypeRule]:
     rules_file = path or resource_path("ExpectedResistancePhenotypes.txt")
     df = pd.read_csv(
@@ -79,24 +112,26 @@ def _load_rules(path: Path | None = None) -> list[ExpectedResistancePhenotypeRul
     )
     header_map = get_resource_headers(list(df.columns))
     rules: list[ExpectedResistancePhenotypeRule] = []
-    for _, row in df.iterrows():
+    for row in df.itertuples(index=False, name=None):
         exceptions = tuple(
-            split_line(row.iloc[header_map["ANTIBIOTIC_EXCEPTIONS"]], C.Delimiters.COMMA_CHAR)
+            split_line(row[header_map["ANTIBIOTIC_EXCEPTIONS"]], C.Delimiters.COMMA_CHAR)
         )
+        abx_code = row[header_map["ABX_CODE"]]
+        abx_code_type = resolve_antibiotic_code_type(abx_code, row[header_map["ABX_CODE_TYPE"]])
         rules.append(
             ExpectedResistancePhenotypeRule(
-                GUIDELINE=row.iloc[header_map["GUIDELINE"]],
-                REFERENCE_TABLE=row.iloc[header_map["REFERENCE_TABLE"]],
-                ORGANISM_CODE=row.iloc[header_map["ORGANISM_CODE"]],
-                ORGANISM_CODE_TYPE=row.iloc[header_map["ORGANISM_CODE_TYPE"]],
-                EXCEPTION_ORGANISM_CODE=row.iloc[header_map["EXCEPTION_ORGANISM_CODE"]],
-                EXCEPTION_ORGANISM_CODE_TYPE=row.iloc[header_map["EXCEPTION_ORGANISM_CODE_TYPE"]],
-                ABX_CODE=row.iloc[header_map["ABX_CODE"]],
-                ABX_CODE_TYPE=row.iloc[header_map["ABX_CODE_TYPE"]],
+                GUIDELINE=row[header_map["GUIDELINE"]],
+                REFERENCE_TABLE=row[header_map["REFERENCE_TABLE"]],
+                ORGANISM_CODE=row[header_map["ORGANISM_CODE"]],
+                ORGANISM_CODE_TYPE=row[header_map["ORGANISM_CODE_TYPE"]],
+                EXCEPTION_ORGANISM_CODE=row[header_map["EXCEPTION_ORGANISM_CODE"]],
+                EXCEPTION_ORGANISM_CODE_TYPE=row[header_map["EXCEPTION_ORGANISM_CODE_TYPE"]],
+                ABX_CODE=abx_code,
+                ABX_CODE_TYPE=abx_code_type,
                 ANTIBIOTIC_EXCEPTIONS=exceptions,
-                DATE_ENTERED=_parse_date(row.iloc[header_map["DATE_ENTERED"]]),
-                DATE_MODIFIED=_parse_date(row.iloc[header_map["DATE_MODIFIED"]]),
-                COMMENTS=row.iloc[header_map["COMMENTS"]],
+                DATE_ENTERED=_parse_date(row[header_map["DATE_ENTERED"]]),
+                DATE_MODIFIED=_parse_date(row[header_map["DATE_MODIFIED"]]),
+                COMMENTS=row[header_map["COMMENTS"]],
             )
         )
     return rules

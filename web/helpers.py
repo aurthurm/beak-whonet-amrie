@@ -7,12 +7,14 @@ import tempfile
 from decimal import Decimal
 from pathlib import Path
 
+from amrie import interpret_single
 from amrie.antibiotic import ALL_ANTIBIOTICS
 from amrie.breakpoint import Breakpoint
 from amrie.config import InterpretationConfiguration, default_configuration
 from amrie.expert_rule import ExpertInterpretationRule, ExpertRuleCriterion
 from amrie.expected_resistance import ExpectedResistancePhenotypeRule
 from amrie.io_library import generate_output_file
+from amrie.isolate import IsolateInterpretation
 from amrie.parsing import VALID_ANTIBIOTIC_FIELD_NAME_REGEX
 
 _COMBO_RE = re.compile(r'/.+$')
@@ -66,6 +68,24 @@ def make_single_tab_config(
         ),
         prioritized_sites_of_infection=(sites_of_infection if restrict_sites else None),
     )
+
+
+def interpret_for_display(
+    config: InterpretationConfiguration,
+    organism_code: str,
+    full_test_code: str,
+    measurement: str,
+) -> str:
+    """Interpret one test and honour ``include_interpretation_comments``.
+
+    ``amrie.interpret_single`` always returns the ``*`` / ``!`` suffixes; the CLI
+    ``single`` command and file output strip them unless comments are enabled.
+    The web single tab and ``/api/interpret/single`` follow the CLI behaviour.
+    """
+    interpretation = interpret_single(config, organism_code, full_test_code, measurement)
+    if not config.include_interpretation_comments:
+        interpretation = IsolateInterpretation.remove_comments(interpretation)
+    return interpretation
 
 
 def make_default_config() -> InterpretationConfiguration:

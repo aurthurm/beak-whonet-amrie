@@ -53,6 +53,7 @@ class IsolateInterpretation:
         use_intrinsic_resistance_rules: bool = True,
         prioritized_breakpoint_types: list[str] | None = None,
         prioritized_sites_of_infection: list[str] | None = None,
+        round_half_dilutions: bool = True,
     ) -> None:
         """Prepare the interpretation context for one data row.
 
@@ -74,6 +75,8 @@ class IsolateInterpretation:
                 rules are skipped for all antibiotics in this row.
             prioritized_breakpoint_types: Breakpoint type filter.
             prioritized_sites_of_infection: Site priority list.
+            round_half_dilutions: When ``True`` (default), E-test MIC values are
+                snapped to the next standard dilution before comparison.
         """
         self.data_row_values = data_row_values
         self.column_names = column_names
@@ -96,6 +99,7 @@ class IsolateInterpretation:
                 data_row_values[field_name],
                 user_defined_breakpoints,
                 guideline_year=guideline_year,
+                round_half_dilutions=round_half_dilutions,
                 use_intrinsic_resistance_rules=use_intrinsic_resistance_rules,
                 prioritized_breakpoint_types=prioritized_breakpoint_types,
                 prioritized_sites_of_infection=prioritized_sites_of_infection,
@@ -158,7 +162,10 @@ class IsolateInterpretation:
                 c.test_name
                 for c in rule.RULE_CRITERIA
                 if VALID_ANTIBIOTIC_CODE_REGEX.match(c.test_name)
-                and any(k.startswith(c.test_name) for k in self.data_row_values)
+                and any(
+                    VALID_ANTIBIOTIC_FIELD_NAME_REGEX.match(k) and short_code(k) == c.test_name
+                    for k in self.data_row_values
+                )
             ]
 
             if any(c.test_name == PROF_CLASS.CEPH3 for c in rule.RULE_CRITERIA):
@@ -172,12 +179,12 @@ class IsolateInterpretation:
                 ]
                 unevaluated = list(unevaluated) + ceph3_tested
 
-            already = {k[:3] for k in self.result_interpretations}
+            already = {short_code(k) for k in self.result_interpretations}
             unevaluated = list(dict.fromkeys(x for x in unevaluated if x not in already))
 
             for abx_code in unevaluated:
                 for full_code in self.data_row_values:
-                    if full_code.startswith(abx_code):
+                    if VALID_ANTIBIOTIC_FIELD_NAME_REGEX.match(full_code) and short_code(full_code) == abx_code:
                         self._get_single_interp(full_code)
 
             if rule.evaluate_criteria(self.data_row_values, self.result_interpretations):
@@ -230,6 +237,7 @@ class IsolateInterpretation:
             use_intrinsic_resistance_rules=interpretation_config.use_intrinsic_resistance_rules,
             prioritized_breakpoint_types=interpretation_config.prioritized_breakpoint_types,
             prioritized_sites_of_infection=interpretation_config.prioritized_sites_of_infection,
+            round_half_dilutions=interpretation_config.round_half_dilutions,
         )
         return interp._get_single_interp(antibiotic_code)
 

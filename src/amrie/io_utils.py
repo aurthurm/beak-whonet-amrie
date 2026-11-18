@@ -28,10 +28,18 @@ def get_resource_headers(headers: list[str]) -> dict[str, int]:
 def split_line(record: str, delimiter: str) -> list[str]:
     """Split a delimited record respecting quoted fields.
 
-    Implements the same quote-aware parsing as ``IO_Library.SplitLine`` in the
-    C# source. Fields wrapped in double quotes may contain the delimiter character
-    without being split. A doubled quote (``""``) inside a quoted field represents
-    a literal quote character.
+    Port of ``IO_Library.SplitLine`` in the C# source. Rules:
+
+    * A record that is empty, or contains neither the delimiter nor a double
+      quote, is returned unchanged as a single field.
+    * A quote opens a quoted field only when the field so far is whitespace
+      only. Inside a quoted field the delimiter is literal, ``""`` is a literal
+      quote, and a single quote closes the field.
+    * Whitespace after a closing quote is skipped.
+    * Unquoted fields are stripped of surrounding whitespace; quoted fields are
+      kept verbatim.
+    * A quote in the middle of an unquoted field is literal.
+    * The final field is always added, so ``"a,"`` yields ``["a", ""]``.
 
     Args:
         record: The raw text line to split.
@@ -39,80 +47,69 @@ def split_line(record: str, delimiter: str) -> list[str]:
             multi-character string raises :exc:`ValueError`.
 
     Returns:
-        List of field strings. Leading and trailing whitespace is stripped from
-        each field unless the field is quoted.
+        List of field strings.
 
     Raises:
         ValueError: If *delimiter* is not exactly one character long.
     """
     if len(delimiter) != 1:
         raise ValueError(f"delimiter must be a single character, got {delimiter!r}")
-    if not record or delimiter not in record:
-        return [record] if record is not None else [""]
+    if not record or (delimiter not in record and C.QUOTE not in record):
+        return [record if record is not None else ""]
 
     results: list[str] = []
-    result: list[str] = []
+    field: list[str] = []
     in_qualifier = False
-    in_field = False
-    row = f"{record}{delimiter}"
+    field_was_quoted = False
+    after_closing_quote = False
+
+    def add_field() -> None:
+        nonlocal field, field_was_quoted, after_closing_quote
+        value = "".join(field)
+        results.append(value if field_was_quoted else value.strip())
+        field = []
+        field_was_quoted = False
+        after_closing_quote = False
 
     idx = 0
-    while idx < len(row):
-        ch = row[idx]
-        if ch == delimiter:
-            if not in_qualifier:
-                results.append("".join(result).strip())
-                result = []
-                in_field = False
-            else:
-                result.append(ch)
-        else:
-            if ch != " ":
-                if ch == C.QUOTE:
-                    if in_qualifier:
-                        next_idx = _index_of_next_non_whitespace(row, idx + 1)
-                        if next_idx >= 0 and row[next_idx] == delimiter:
-                            in_qualifier = False
-                            idx += 1
-                            continue
-                        in_field = True
-                        result.append(ch)
-                    else:
-                        in_qualifier = True
+    length = len(record)
+    while idx < length:
+        current = record[idx]
+
+        if in_qualifier:
+            if current == C.QUOTE:
+                if idx + 1 < length and record[idx + 1] == C.QUOTE:
+                    field.append(C.QUOTE)
+                    idx += 1
                 else:
-                    result.append(ch)
-                    in_field = True
-            elif in_qualifier or in_field:
-                result.append(ch)
+                    in_qualifier = False
+                    after_closing_quote = True
+            else:
+                field.append(current)
+        elif current == delimiter:
+            add_field()
+        elif after_closing_quote and current.isspace():
+            pass
+        elif current == C.QUOTE and "".join(field).strip() == "":
+            field = []
+            field_was_quoted = True
+            in_qualifier = True
+        else:
+            after_closing_quote = False
+            field.append(current)
         idx += 1
 
+    add_field()
     return results
-
-
-def _index_of_next_non_whitespace(source: str, start_index: int) -> int:
-    """Return the index of the first non-whitespace character at or after *start_index*.
-
-    Args:
-        source: String to search.
-        start_index: Position to begin searching from.
-
-    Returns:
-        Index of the next non-whitespace character, or ``-1`` if none is found.
-    """
-    if start_index < 0 or source is None:
-        return -1
-    for i in range(start_index, len(source)):
-        if not source[i].isspace():
-            return i
-    return -1
 
 
 def to_line(values: list[str], delimiter: str) -> str:
     """Join a list of field values into a single delimited line.
 
-    Fields that contain the delimiter character or a double-quote are wrapped in
-    double quotes; any existing double-quotes within such fields are escaped as
-    ``""``. Fields that need no quoting are written as-is.
+    Port of ``IO_Library.ToLine``. A field is wrapped in double quotes when it
+    contains the delimiter, a double quote, a carriage return or line feed, or
+    has leading or trailing whitespace. Existing double quotes inside a wrapped
+    field are escaped as ``""``. Empty and plain fields are written as-is.
 
     Args:
         values: Ordered list of field values to join.
@@ -123,7 +120,16 @@ def to_line(values: list[str], delimiter: str) -> str:
         a line in a delimited output file.
     """
     def format_field(v: str) -> str:
-        if not v or (delimiter not in v and C.QUOTE not in v):
+        if not v:
+            return v
+        if (
+            delimiter not in v
+            and C.QUOTE not in v
+            and "\r" not in v
+            and "\n" not in v
+            and not v[0].isspace()
+            and not v[-1].isspace()
+        ):
             return v
         escaped = v.replace(C.QUOTE, C.TWO_QUOTES) if C.QUOTE in v else v
         return f"{C.QUOTE}{escaped}{C.QUOTE}"

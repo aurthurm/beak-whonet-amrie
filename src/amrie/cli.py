@@ -28,27 +28,30 @@ app = typer.Typer(add_completion=False, help="AMRIE antimicrobial susceptibility
 
 
 def _resolve_delimiter(delimiter: str) -> str:
-    """Normalise a CLI delimiter argument to a single character.
+    """Normalise a CLI delimiter argument to a supported single character.
 
-    Accepts the special token ``"TAB"`` (case-insensitive) as an alias for a
-    literal tab character.  Any other value has its first character used, so
-    passing ``"pipe"`` is the same as passing ``"|"``.
+    Accepts ``"TAB"`` (case-insensitive) as an alias for a literal tab, or
+    exactly one of ``,`` ``;`` ``|``.
 
     Args:
         delimiter: Raw value from the ``--delimiter`` option.
 
     Returns:
         A single-character delimiter string.
+
+    Raises:
+        typer.BadParameter: If the value is not a supported delimiter.
     """
-    if delimiter.upper() == C.Delimiters.TAB_PLACEHOLDER:
-        return C.Delimiters.TAB_CHAR
-    return delimiter[0]
+    try:
+        return C.Delimiters.parse_file_delimiter_token(delimiter)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="'--delimiter' / '-d'") from exc
 
 
 @app.command("file")
 def file_mode(
     config: Path = typer.Option(..., "--config", "-c", help="Path to JSON configuration file"),
-    delimiter: str = typer.Option(..., "--delimiter", "-d", help="Field delimiter ('TAB' or single character)"),
+    delimiter: str = typer.Option(..., "--delimiter", "-d", help="Field delimiter: TAB, ',', ';', or '|'"),
     input: Path = typer.Option(..., "--input", "-i", help="Input data file"),
     output: Path = typer.Option(..., "--output", "-o", help="Output file path"),
 ) -> None:

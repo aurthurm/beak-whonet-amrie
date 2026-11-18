@@ -28,7 +28,6 @@ from __future__ import annotations
 import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from pathlib import Path
 
 from amrie import constants as C
 from amrie.antibiotic_rules import preheat_breakpoint_cache
@@ -92,7 +91,9 @@ def load_input_file(
     row_value_sets: list[dict[str, str]] = []
     headers: dict[int, str] = {}
 
-    with open(input_file, encoding="utf-8", newline="") as f:
+    # utf-8-sig drops a leading BOM (Excel "CSV UTF-8" exports), as C# does with
+    # detectEncodingFromByteOrderMarks; otherwise the header reads "\ufeffORGANISM".
+    with open(input_file, encoding="utf-8-sig", newline="") as f:
         lines = f.read().splitlines()
 
     if not lines:
@@ -159,6 +160,7 @@ def _interpret_row(
         use_intrinsic_resistance_rules=interpretation_config.use_intrinsic_resistance_rules,
         prioritized_breakpoint_types=interpretation_config.prioritized_breakpoint_types,
         prioritized_sites_of_infection=interpretation_config.prioritized_sites_of_infection,
+        round_half_dilutions=interpretation_config.round_half_dilutions,
     ).get_all_interpretations()
     return row, interp
 

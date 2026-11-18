@@ -145,12 +145,13 @@ class ExpertInterpretationRule:
                 matching = [
                     abx
                     for abx in row_values
-                    if (
-                        VALID_ANTIBIOTIC_FIELD_NAME_REGEX.match(abx) and abx.startswith(criterion.test_name)
-                    )
-                    or (
-                        criterion.test_name == PROF_CLASS.CEPH3
-                        and any(ceph3 == abx[:3] for ceph3 in CEPH3_ANTIBIOTIC_CODES)
+                    if VALID_ANTIBIOTIC_FIELD_NAME_REGEX.match(abx)
+                    and (
+                        short_code(abx) == criterion.test_name
+                        or (
+                            criterion.test_name == PROF_CLASS.CEPH3
+                            and short_code(abx) in CEPH3_ANTIBIOTIC_CODES
+                        )
                     )
                 ]
 
@@ -197,11 +198,11 @@ def _load_expert_rules(path: Path | None = None) -> list[ExpertInterpretationRul
     header_map = get_resource_headers(list(df.columns))
     all_rules: list[ExpertInterpretationRule] = []
 
-    for _, row in df.iterrows():
+    for row in df.itertuples(index=False, name=None):
         rule_criteria: list[ExpertRuleCriterion] = []
         rule_op = RuleOperators.AND
 
-        for token in split_line(row.iloc[header_map["RULE_CRITERIA"]], C.Delimiters.SPACE):
+        for token in split_line(row[header_map["RULE_CRITERIA"]], C.Delimiters.SPACE):
             if not token:
                 continue
             if C.Delimiters.EQUALS_SIGN in token:
@@ -212,22 +213,22 @@ def _load_expert_rules(path: Path | None = None) -> list[ExpertInterpretationRul
             else:
                 raise ValueError(f"Invalid rule criteria token: {token}")
 
-        rule_code = row.iloc[header_map["RULE_CODE"]]
+        rule_code = row[header_map["RULE_CODE"]]
         if rule_code == RuleCodes.MRSTAPH:
             affected = list(MRS_ANTIBIOTICS_EXCEPT_CPT_BPR)
         elif rule_code == RuleCodes.ICR:
             affected = list(ICR_ANTIBIOTICS)
         else:
-            affected = split_line(row.iloc[header_map["AFFECTED_ANTIBIOTICS"]], C.Delimiters.COMMA_CHAR)
+            affected = split_line(row[header_map["AFFECTED_ANTIBIOTICS"]], C.Delimiters.COMMA_CHAR)
 
-        exceptions = split_line(row.iloc[header_map["ANTIBIOTIC_EXCEPTIONS"]], C.Delimiters.COMMA_CHAR)
+        exceptions = split_line(row[header_map["ANTIBIOTIC_EXCEPTIONS"]], C.Delimiters.COMMA_CHAR)
 
         all_rules.append(
             ExpertInterpretationRule(
                 RULE_CODE=rule_code,
-                DESCRIPTION=row.iloc[header_map["DESCRIPTION"]],
-                ORGANISM_CODE=row.iloc[header_map["ORGANISM_CODE"]],
-                ORGANISM_CODE_TYPE=row.iloc[header_map["ORGANISM_CODE_TYPE"]],
+                DESCRIPTION=row[header_map["DESCRIPTION"]],
+                ORGANISM_CODE=row[header_map["ORGANISM_CODE"]],
+                ORGANISM_CODE_TYPE=row[header_map["ORGANISM_CODE_TYPE"]],
                 RULE_CRITERIA=rule_criteria,
                 CriteriaOperator=rule_op,
                 AFFECTED_ANTIBIOTICS=affected,
