@@ -189,17 +189,26 @@ class Antibiotic:
 
 
 def short_code(full_antibiotic_code: str) -> str:
-    """Extract the three-character drug code from a full WHONET column name.
+    """Extract the drug code from a full WHONET column name.
 
-    A WHONET antibiotic column name has the form ``<3-char code>_<suffix>``
-    (e.g. ``"AMP_ND10"``). This function returns just the first three characters.
+    Port of ``Antibiotic.ShortCode`` in ``Antibiotic.cs``:
+
+    * User-defined codes (case-insensitive ``X_`` prefix) return the text up to
+      the second underscore, so ``"X_12_NM"`` gives ``"X_12"`` and ``"X_1_NM"``
+      gives ``"X_1"``. With no second underscore, the whole string is returned
+      (e.g. ``"X_1"`` gives ``"X_1"``).
+    * Standard codes return the first three characters (or the whole string if
+      it is shorter), so ``"AMP_ND10"`` gives ``"AMP"``.
 
     Args:
         full_antibiotic_code: Full WHONET antibiotic column name.
 
     Returns:
-        Three-character drug code (e.g. ``"AMP"``).
+        The drug code (e.g. ``"AMP"`` or ``"X_12"``).
     """
+    if full_antibiotic_code.upper().startswith("X_"):
+        second_underscore = full_antibiotic_code.find("_", 2)
+        return full_antibiotic_code[:second_underscore] if second_underscore > 0 else full_antibiotic_code
     return full_antibiotic_code[:3]
 
 

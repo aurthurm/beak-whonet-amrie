@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
+from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
@@ -116,6 +117,78 @@ def _sites_from_field(site_of_infection: str) -> tuple[str, ...]:
     return tuple(sites)
 
 
+_ALL_ORGANISMS_CODE = "ALL"
+"""Organism code *and* code type of breakpoints that apply to every organism."""
+
+_SIMPLE_CODE_TYPE_ATTRIBUTES: tuple[str, ...] = (
+    "WHONET_ORG_CODE",
+    "SEROVAR_GROUP",
+    "SPECIES_GROUP",
+    "GENUS_CODE",
+    "GENUS_GROUP",
+    "FAMILY_CODE",
+    "SUBKINGDOM_CODE",
+)
+"""Organism code types whose code is the same-named :class:`Organism` attribute."""
+
+_RESOLVABLE_ORGANISM_CODE_TYPES: tuple[str, ...] = (
+    "WHONET_ORG_CODE",
+    "SEROVAR_GROUP",
+    "SPECIES_GROUP",
+    "GENUS_CODE",
+    "GENUS_GROUP",
+    "FAMILY_CODE",
+    "SUBKINGDOM_CODE",
+    "ANAEROBE",
+    C.OrganismGroups.ANAEROBE_PLUS_SUBKINGDOM_CODE,
+)
+"""Code types tried by :func:`_resolve_organism_code_type` when the declared type fails."""
+
+
+def _build_organism_code_index() -> dict[str, frozenset[str]]:
+    """Index, per organism code type, every code that some current organism matches.
+
+    Mirrors the ``MatchesOrganismCodeType`` rules from ``Breakpoint.cs``: ``code`` is
+    in ``index[type]`` exactly when at least one organism in
+    :data:`~amrie.organism.CURRENT_ORGANISMS` matches it under *type*. Building the
+    index once avoids scanning every organism for each breakpoint row.
+    """
+    index: dict[str, set[str]] = {code_type: set() for code_type in _RESOLVABLE_ORGANISM_CODE_TYPES}
+    for o in CURRENT_ORGANISMS.values():
+        for attribute in _SIMPLE_CODE_TYPE_ATTRIBUTES:
+            index[attribute].add(getattr(o, attribute))
+        if o.ANAEROBE:
+            index["ANAEROBE"].add(C.OrganismGroups.ANAEROBES)
+            index[C.OrganismGroups.ANAEROBE_PLUS_SUBKINGDOM_CODE].add(
+                C.OrganismGroups.GRAM_POSITIVE_ANAEROBES
+                if o.SUBKINGDOM_CODE == C.TestResultCodes.POSITIVE
+                else C.OrganismGroups.GRAM_NEGATIVE_ANAEROBES
+            )
+    return {code_type: frozenset(codes) for code_type, codes in index.items()}
+
+
+_ORGANISM_CODE_INDEX: dict[str, frozenset[str]] = _build_organism_code_index()
+
+
+@lru_cache(maxsize=None)
+def _resolve_organism_code_type(organism_code: str, declared_code_type: str) -> str:
+    """Return the organism code type to use for a built-in breakpoint row.
+
+    Port of ``Breakpoint.ResolveOrganismCodeType``. If some current organism matches
+    *organism_code* under *declared_code_type*, that type is kept. Otherwise every
+    supported type is tried; if exactly one of them matches some organism it is
+    used, and in all other cases the declared type is kept. Memoized per
+    ``(code, type)`` pair, since the built-in table repeats pairs heavily.
+    """
+    def matches(code_type: str) -> bool:
+        return organism_code in _ORGANISM_CODE_INDEX.get(code_type, frozenset())
+
+    if matches(declared_code_type):
+        return declared_code_type
+    matching_types = [code_type for code_type in _RESOLVABLE_ORGANISM_CODE_TYPES if matches(code_type)]
+    return matching_types[0] if len(matching_types) == 1 else declared_code_type
+
+
 def load_breakpoints(breakpoints_table_file: str | Path, user_defined: bool = False) -> list[Breakpoint]:
     """Load breakpoints from a tab-delimited file.
 
@@ -123,7 +196,10 @@ def load_breakpoints(breakpoints_table_file: str | Path, user_defined: bool = Fa
         breakpoints_table_file: Path to the breakpoints TSV file.
         user_defined: When ``True``, overrides the ``GUIDELINES`` field of every
             loaded breakpoint with ``"UserDefined"`` so that user-provided
-            breakpoints always sort ahead of built-in ones.
+            breakpoints always sort ahead of built-in ones. Organism code types
+            are left as declared. When ``False`` (built-in rows), a declared type
+            that matches no current organism is replaced via
+            :func:`_resolve_organism_code_type`.
 
     Returns:
         List of :class:`Breakpoint` instances in file order.
@@ -151,6 +227,11 @@ def load_breakpoints(breakpoints_table_file: str | Path, user_defined: bool = Fa
         if user_defined:
             guidelines = GuidelineNames.USER_DEFINED
 
+        organism_code = row.iloc[header_map["ORGANISM_CODE"]]
+        organism_code_type = row.iloc[header_map["ORGANISM_CODE_TYPE"]]
+        if not user_defined:
+            organism_code_type = _resolve_organism_code_type(organism_code, organism_code_type)
+
         site_raw = row.iloc[header_map["SITE_OF_INFECTION"]]
         ecv_tentative_idx = header_map.get("ECV_ECOFF_TENTATIVE")
         ecv_tentative = (
@@ -162,8 +243,8 @@ def load_breakpoints(breakpoints_table_file: str | Path, user_defined: bool = Fa
                 YEAR=int(row.iloc[header_map["YEAR"]]),
                 TEST_METHOD=row.iloc[header_map["TEST_METHOD"]],
                 POTENCY=row.iloc[header_map["POTENCY"]],
-                ORGANISM_CODE=row.iloc[header_map["ORGANISM_CODE"]],
-                ORGANISM_CODE_TYPE=row.iloc[header_map["ORGANISM_CODE_TYPE"]],
+                ORGANISM_CODE=organism_code,
+                ORGANISM_CODE_TYPE=organism_code_type,
                 BREAKPOINT_TYPE=row.iloc[header_map["BREAKPOINT_TYPE"]],
                 HOST=row.iloc[header_map["HOST"]],
                 SITE_OF_INFECTION=site_raw,
@@ -213,6 +294,8 @@ def _get_index(prioritized_sites: list[str], breakpoint_sites: str) -> int:
 
 def _organism_matches(bp: Breakpoint, o: Organism) -> bool:
     """Return ``True`` if *bp*'s organism code matches *o* at any taxonomy level."""
+    if bp.ORGANISM_CODE_TYPE == _ALL_ORGANISMS_CODE and bp.ORGANISM_CODE == _ALL_ORGANISMS_CODE:
+        return True
     if o.SEROVAR_GROUP and bp.ORGANISM_CODE_TYPE == "SEROVAR_GROUP" and o.SEROVAR_GROUP == bp.ORGANISM_CODE:
         return True
     if bp.ORGANISM_CODE_TYPE == "WHONET_ORG_CODE" and o.WHONET_ORG_CODE == bp.ORGANISM_CODE:

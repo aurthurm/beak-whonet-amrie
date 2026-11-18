@@ -145,12 +145,13 @@ class ExpertInterpretationRule:
                 matching = [
                     abx
                     for abx in row_values
-                    if (
-                        VALID_ANTIBIOTIC_FIELD_NAME_REGEX.match(abx) and abx.startswith(criterion.test_name)
-                    )
-                    or (
-                        criterion.test_name == PROF_CLASS.CEPH3
-                        and any(ceph3 == abx[:3] for ceph3 in CEPH3_ANTIBIOTIC_CODES)
+                    if VALID_ANTIBIOTIC_FIELD_NAME_REGEX.match(abx)
+                    and (
+                        short_code(abx) == criterion.test_name
+                        or (
+                            criterion.test_name == PROF_CLASS.CEPH3
+                            and short_code(abx) in CEPH3_ANTIBIOTIC_CODES
+                        )
                     )
                 ]
 

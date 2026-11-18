@@ -6,12 +6,13 @@ import asyncio
 import tempfile
 from pathlib import Path
 
-from fastapi import File, Form, UploadFile
+from fastapi import File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from nicegui import app
 
 from amrie import interpret_single
 from amrie.config import read_configuration
+from amrie.constants import Delimiters
 from amrie.io_library import interpret_isolates, load_input_file
 from web.helpers import (
     build_full_test_codes,
@@ -20,13 +21,6 @@ from web.helpers import (
 )
 from web.models.requests import SingleInterpretRequest
 from web.models.responses import SingleInterpretResponse, SingleInterpretResult
-
-_DELIMITER_MAP = {
-    '|': '|',
-    ',': ',',
-    ';': ';',
-    'TAB': '\t',
-}
 
 
 def _run_single_interpret(req: SingleInterpretRequest) -> SingleInterpretResponse:
@@ -63,7 +57,10 @@ async def api_interpret_file(
     delimiter: str = Form('|'),
     guideline_year: int = Form(...),
 ) -> Response:
-    delim = _DELIMITER_MAP.get(delimiter, delimiter)
+    try:
+        delim = Delimiters.parse_file_delimiter_token(delimiter)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     data_bytes = await data_file.read()
     config_bytes = await config_file.read()
 

@@ -159,6 +159,7 @@ def _interpret_row(
         use_intrinsic_resistance_rules=interpretation_config.use_intrinsic_resistance_rules,
         prioritized_breakpoint_types=interpretation_config.prioritized_breakpoint_types,
         prioritized_sites_of_infection=interpretation_config.prioritized_sites_of_infection,
+        round_half_dilutions=interpretation_config.round_half_dilutions,
     ).get_all_interpretations()
     return row, interp
 
