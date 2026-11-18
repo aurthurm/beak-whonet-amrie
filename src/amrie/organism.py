@@ -95,34 +95,34 @@ def _load_all_organisms(path: Path | None = None) -> list[Organism]:
     header_map = get_resource_headers(list(df.columns))
     organisms: list[Organism] = []
 
-    for _, row in df.iterrows():
+    for row in df.itertuples(index=False, name=None):
         organisms.append(
             Organism(
-                WHONET_ORG_CODE=row.iloc[header_map["WHONET_ORG_CODE"]],
-                ORGANISM=row.iloc[header_map["ORGANISM"]],
-                TAXONOMIC_STATUS=row.iloc[header_map["TAXONOMIC_STATUS"]],
-                COMMON=row.iloc[header_map["COMMON"]] == "X",
-                COMMON_COMMENSAL=row.iloc[header_map["COMMON_COMMENSAL"]] == "X",
-                ORGANISM_TYPE=row.iloc[header_map["ORGANISM_TYPE"]],
-                ANAEROBE=row.iloc[header_map["ANAEROBE"]] == "X",
-                MORPHOLOGY=row.iloc[header_map["MORPHOLOGY"]],
-                SUBKINGDOM_CODE=row.iloc[header_map["SUBKINGDOM_CODE"]],
-                FAMILY_CODE=row.iloc[header_map["FAMILY_CODE"]],
-                GENUS_GROUP=row.iloc[header_map["GENUS_GROUP"]],
-                GENUS_CODE=row.iloc[header_map["GENUS_CODE"]],
-                SPECIES_GROUP=row.iloc[header_map["SPECIES_GROUP"]],
-                SEROVAR_GROUP=row.iloc[header_map["SEROVAR_GROUP"]],
-                SCT_CODE=row.iloc[header_map["SCT_CODE"]],
-                SCT_TEXT=row.iloc[header_map["SCT_TEXT"]],
-                GBIF_TAXON_ID=row.iloc[header_map["GBIF_TAXON_ID"]],
-                GBIF_DATASET_ID=row.iloc[header_map["GBIF_DATASET_ID"]],
-                GBIF_TAXONOMIC_STATUS=row.iloc[header_map["GBIF_TAXONOMIC_STATUS"]],
-                KINGDOM=row.iloc[header_map["KINGDOM"]],
-                PHYLUM=row.iloc[header_map["PHYLUM"]],
-                CLASS=row.iloc[header_map["CLASS"]],
-                ORDER=row.iloc[header_map["ORDER"]],
-                FAMILY=row.iloc[header_map["FAMILY"]],
-                GENUS=row.iloc[header_map["GENUS"]],
+                WHONET_ORG_CODE=row[header_map["WHONET_ORG_CODE"]],
+                ORGANISM=row[header_map["ORGANISM"]],
+                TAXONOMIC_STATUS=row[header_map["TAXONOMIC_STATUS"]],
+                COMMON=row[header_map["COMMON"]] == "X",
+                COMMON_COMMENSAL=row[header_map["COMMON_COMMENSAL"]] == "X",
+                ORGANISM_TYPE=row[header_map["ORGANISM_TYPE"]],
+                ANAEROBE=row[header_map["ANAEROBE"]] == "X",
+                MORPHOLOGY=row[header_map["MORPHOLOGY"]],
+                SUBKINGDOM_CODE=row[header_map["SUBKINGDOM_CODE"]],
+                FAMILY_CODE=row[header_map["FAMILY_CODE"]],
+                GENUS_GROUP=row[header_map["GENUS_GROUP"]],
+                GENUS_CODE=row[header_map["GENUS_CODE"]],
+                SPECIES_GROUP=row[header_map["SPECIES_GROUP"]],
+                SEROVAR_GROUP=row[header_map["SEROVAR_GROUP"]],
+                SCT_CODE=row[header_map["SCT_CODE"]],
+                SCT_TEXT=row[header_map["SCT_TEXT"]],
+                GBIF_TAXON_ID=row[header_map["GBIF_TAXON_ID"]],
+                GBIF_DATASET_ID=row[header_map["GBIF_DATASET_ID"]],
+                GBIF_TAXONOMIC_STATUS=row[header_map["GBIF_TAXONOMIC_STATUS"]],
+                KINGDOM=row[header_map["KINGDOM"]],
+                PHYLUM=row[header_map["PHYLUM"]],
+                CLASS=row[header_map["CLASS"]],
+                ORDER=row[header_map["ORDER"]],
+                FAMILY=row[header_map["FAMILY"]],
+                GENUS=row[header_map["GENUS"]],
             )
         )
     return organisms
@@ -167,10 +167,10 @@ def _load_merged_organisms(path: Path | None = None) -> dict[str, str]:
     )
     header_map = get_resource_headers(list(df.columns))
     merged: dict[str, str] = {}
-    for _, row in df.iterrows():
-        taxonomic_status = row.iloc[header_map["TAXONOMIC_STATUS"]]
-        old_code = row.iloc[header_map["WHONET_ORG_CODE"]]
-        new_code = row.iloc[header_map[_REPLACED_BY]]
+    for row in df.itertuples(index=False, name=None):
+        taxonomic_status = row[header_map["TAXONOMIC_STATUS"]]
+        old_code = row[header_map["WHONET_ORG_CODE"]]
+        new_code = row[header_map[_REPLACED_BY]]
         if taxonomic_status != _CURRENT_ORG_CODE and new_code and old_code not in merged:
             merged[old_code] = new_code
     return merged

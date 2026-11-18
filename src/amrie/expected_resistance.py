@@ -112,26 +112,26 @@ def _load_rules(path: Path | None = None) -> list[ExpectedResistancePhenotypeRul
     )
     header_map = get_resource_headers(list(df.columns))
     rules: list[ExpectedResistancePhenotypeRule] = []
-    for _, row in df.iterrows():
+    for row in df.itertuples(index=False, name=None):
         exceptions = tuple(
-            split_line(row.iloc[header_map["ANTIBIOTIC_EXCEPTIONS"]], C.Delimiters.COMMA_CHAR)
+            split_line(row[header_map["ANTIBIOTIC_EXCEPTIONS"]], C.Delimiters.COMMA_CHAR)
         )
-        abx_code = row.iloc[header_map["ABX_CODE"]]
-        abx_code_type = resolve_antibiotic_code_type(abx_code, row.iloc[header_map["ABX_CODE_TYPE"]])
+        abx_code = row[header_map["ABX_CODE"]]
+        abx_code_type = resolve_antibiotic_code_type(abx_code, row[header_map["ABX_CODE_TYPE"]])
         rules.append(
             ExpectedResistancePhenotypeRule(
-                GUIDELINE=row.iloc[header_map["GUIDELINE"]],
-                REFERENCE_TABLE=row.iloc[header_map["REFERENCE_TABLE"]],
-                ORGANISM_CODE=row.iloc[header_map["ORGANISM_CODE"]],
-                ORGANISM_CODE_TYPE=row.iloc[header_map["ORGANISM_CODE_TYPE"]],
-                EXCEPTION_ORGANISM_CODE=row.iloc[header_map["EXCEPTION_ORGANISM_CODE"]],
-                EXCEPTION_ORGANISM_CODE_TYPE=row.iloc[header_map["EXCEPTION_ORGANISM_CODE_TYPE"]],
+                GUIDELINE=row[header_map["GUIDELINE"]],
+                REFERENCE_TABLE=row[header_map["REFERENCE_TABLE"]],
+                ORGANISM_CODE=row[header_map["ORGANISM_CODE"]],
+                ORGANISM_CODE_TYPE=row[header_map["ORGANISM_CODE_TYPE"]],
+                EXCEPTION_ORGANISM_CODE=row[header_map["EXCEPTION_ORGANISM_CODE"]],
+                EXCEPTION_ORGANISM_CODE_TYPE=row[header_map["EXCEPTION_ORGANISM_CODE_TYPE"]],
                 ABX_CODE=abx_code,
                 ABX_CODE_TYPE=abx_code_type,
                 ANTIBIOTIC_EXCEPTIONS=exceptions,
-                DATE_ENTERED=_parse_date(row.iloc[header_map["DATE_ENTERED"]]),
-                DATE_MODIFIED=_parse_date(row.iloc[header_map["DATE_MODIFIED"]]),
-                COMMENTS=row.iloc[header_map["COMMENTS"]],
+                DATE_ENTERED=_parse_date(row[header_map["DATE_ENTERED"]]),
+                DATE_MODIFIED=_parse_date(row[header_map["DATE_MODIFIED"]]),
+                COMMENTS=row[header_map["COMMENTS"]],
             )
         )
     return rules

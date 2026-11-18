@@ -222,46 +222,46 @@ def load_breakpoints(breakpoints_table_file: str | Path, user_defined: bool = Fa
     header_map = get_resource_headers(list(df.columns))
     breakpoints: list[Breakpoint] = []
 
-    for _, row in df.iterrows():
-        guidelines = row.iloc[header_map["GUIDELINES"]]
+    for row in df.itertuples(index=False, name=None):
+        guidelines = row[header_map["GUIDELINES"]]
         if user_defined:
             guidelines = GuidelineNames.USER_DEFINED
 
-        organism_code = row.iloc[header_map["ORGANISM_CODE"]]
-        organism_code_type = row.iloc[header_map["ORGANISM_CODE_TYPE"]]
+        organism_code = row[header_map["ORGANISM_CODE"]]
+        organism_code_type = row[header_map["ORGANISM_CODE_TYPE"]]
         if not user_defined:
             organism_code_type = _resolve_organism_code_type(organism_code, organism_code_type)
 
-        site_raw = row.iloc[header_map["SITE_OF_INFECTION"]]
+        site_raw = row[header_map["SITE_OF_INFECTION"]]
         ecv_tentative_idx = header_map.get("ECV_ECOFF_TENTATIVE")
         ecv_tentative = (
-            row.iloc[ecv_tentative_idx] == "X" if ecv_tentative_idx is not None else False
+            row[ecv_tentative_idx] == "X" if ecv_tentative_idx is not None else False
         )
         breakpoints.append(
             Breakpoint(
                 GUIDELINES=guidelines,
-                YEAR=int(row.iloc[header_map["YEAR"]]),
-                TEST_METHOD=row.iloc[header_map["TEST_METHOD"]],
-                POTENCY=row.iloc[header_map["POTENCY"]],
+                YEAR=int(row[header_map["YEAR"]]),
+                TEST_METHOD=row[header_map["TEST_METHOD"]],
+                POTENCY=row[header_map["POTENCY"]],
                 ORGANISM_CODE=organism_code,
                 ORGANISM_CODE_TYPE=organism_code_type,
-                BREAKPOINT_TYPE=row.iloc[header_map["BREAKPOINT_TYPE"]],
-                HOST=row.iloc[header_map["HOST"]],
+                BREAKPOINT_TYPE=row[header_map["BREAKPOINT_TYPE"]],
+                HOST=row[header_map["HOST"]],
                 SITE_OF_INFECTION=site_raw,
                 SITES_OF_INFECTION=_sites_from_field(site_raw),
-                REFERENCE_TABLE=row.iloc[header_map["REFERENCE_TABLE"]],
-                REFERENCE_SEQUENCE=row.iloc[header_map["REFERENCE_SEQUENCE"]],
-                WHONET_ABX_CODE=row.iloc[header_map["WHONET_ABX_CODE"]],
-                WHONET_TEST=row.iloc[header_map["WHONET_TEST"]],
-                R=_parse_decimal(row.iloc[header_map["R"]]),
-                I=row.iloc[header_map["I"]],
-                SDD=row.iloc[header_map["SDD"]],
-                S=_parse_decimal(row.iloc[header_map["S"]]),
-                ECV_ECOFF=_parse_decimal(row.iloc[header_map["ECV_ECOFF"]]),
+                REFERENCE_TABLE=row[header_map["REFERENCE_TABLE"]],
+                REFERENCE_SEQUENCE=row[header_map["REFERENCE_SEQUENCE"]],
+                WHONET_ABX_CODE=row[header_map["WHONET_ABX_CODE"]],
+                WHONET_TEST=row[header_map["WHONET_TEST"]],
+                R=_parse_decimal(row[header_map["R"]]),
+                I=row[header_map["I"]],
+                SDD=row[header_map["SDD"]],
+                S=_parse_decimal(row[header_map["S"]]),
+                ECV_ECOFF=_parse_decimal(row[header_map["ECV_ECOFF"]]),
                 ECV_ECOFF_TENTATIVE=ecv_tentative,
-                DATE_ENTERED=_parse_date(row.iloc[header_map["DATE_ENTERED"]]),
-                DATE_MODIFIED=_parse_date(row.iloc[header_map["DATE_MODIFIED"]]),
-                COMMENTS=row.iloc[header_map["COMMENTS"]],
+                DATE_ENTERED=_parse_date(row[header_map["DATE_ENTERED"]]),
+                DATE_MODIFIED=_parse_date(row[header_map["DATE_MODIFIED"]]),
+                COMMENTS=row[header_map["COMMENTS"]],
             )
         )
     return breakpoints

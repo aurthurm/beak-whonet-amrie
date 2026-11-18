@@ -7,7 +7,7 @@ module-level caches and provides the core numeric interpretation logic.
 
 * ``_intrinsic_cache`` — stores the most-applicable intrinsic resistance rule for
   each ``(organism, guideline, drug_code)`` triple so it is looked up only once
-  per session.  Protected by ``_intrinsic_cache_lock``.
+  per session.
 
 * ``_breakpoint_cache`` — a flat dict mapping
   ``(organism, guideline, year, selection_key)`` to the most-applicable
@@ -15,10 +15,12 @@ module-level caches and provides the core numeric interpretation logic.
   guideline and year that influences the lookup result: the drug column, the
   prioritized breakpoint types, the prioritized sites of infection and the
   user-defined breakpoints (see :func:`_make_selection_key`).  Two calls that
-  differ only in those inputs therefore never share a cache entry.  Uses
-  double-checked locking: the fast (lockless) read avoids contention on cache
-  hits; the write acquires ``_breakpoint_cache_lock`` and double-checks to
-  handle concurrent misses.
+  differ only in those inputs therefore never share a cache entry.  Misses are
+  computed outside the cache lock and stored first-writer-wins.
+
+Both caches are :class:`~amrie.bounded_cache.BoundedCache` instances (FIFO,
+capped by entry count and key characters, limits as in C#) so a long-running
+process such as the web API cannot grow them without bound.
 
 **Parallelism**
 
@@ -30,12 +32,12 @@ begins, eliminating lock contention during the main per-row processing loop.
 from __future__ import annotations
 
 import os
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 
 from amrie import constants as C
 from amrie.antibiotic import TestMethods
+from amrie.bounded_cache import MISSING, BoundedCache, BoundedCacheStatistics
 from amrie.breakpoint import Breakpoint, BreakpointTypes, get_applicable_breakpoints
 from amrie.expected_resistance import (
     ExpectedResistancePhenotypeRule,
@@ -43,8 +45,15 @@ from amrie.expected_resistance import (
 )
 from amrie.parsing import AntibioticComponents, parse_result, round_etest_half_dilutions_up
 
-_intrinsic_cache: dict[str, dict[str, dict[str, ExpectedResistancePhenotypeRule | None]]] = {}
-_intrinsic_cache_lock = threading.Lock()
+MAX_INTRINSIC_CACHE_ENTRIES = 131_072
+MAX_INTRINSIC_CACHE_CHARACTERS = 4_194_304
+MAX_BREAKPOINT_CACHE_ENTRIES = 262_144
+MAX_BREAKPOINT_CACHE_CHARACTERS = 16_777_216
+
+IntrinsicCacheKey = tuple[str, str, str]
+_intrinsic_cache: BoundedCache[IntrinsicCacheKey, ExpectedResistancePhenotypeRule | None] = BoundedCache(
+    MAX_INTRINSIC_CACHE_ENTRIES, MAX_INTRINSIC_CACHE_CHARACTERS
+)
 #: ``(drug, types, sites, user_breakpoints)`` — see :func:`_make_selection_key`.
 SelectionKey = tuple[
     str,
@@ -54,19 +63,24 @@ SelectionKey = tuple[
 ]
 BreakpointCacheKey = tuple[str, str, int, SelectionKey]
 
-_breakpoint_cache: dict[BreakpointCacheKey, Breakpoint | None] = {}
-_breakpoint_cache_lock = threading.Lock()
-_MISSING: object = object()
+_breakpoint_cache: BoundedCache[BreakpointCacheKey, Breakpoint | None] = BoundedCache(
+    MAX_BREAKPOINT_CACHE_ENTRIES, MAX_BREAKPOINT_CACHE_CHARACTERS
+)
 
 
 def clear_breakpoints() -> None:
-    """Evict all entries from the breakpoint cache.
+    """Evict all entries from the breakpoint and intrinsic-rule caches.
 
-    Intended for testing and for scenarios where the underlying breakpoint
-    resource data has changed between calls within the same process.
+    Intended for testing and for scenarios where the underlying resource data
+    has changed between calls within the same process.
     """
-    with _breakpoint_cache_lock:
-        _breakpoint_cache.clear()
+    _breakpoint_cache.clear()
+    _intrinsic_cache.clear()
+
+
+def cache_statistics() -> tuple[BoundedCacheStatistics, BoundedCacheStatistics]:
+    """Return ``(breakpoint, intrinsic)`` cache statistics (C# ``CacheStatistics``)."""
+    return _breakpoint_cache.statistics, _intrinsic_cache.statistics
 
 
 def _user_breakpoint_fingerprint(bp: Breakpoint) -> tuple[object, ...]:
@@ -146,7 +160,7 @@ def preheat_breakpoint_cache(
 
     Called once before a parallel interpretation run.  Warming the cache
     up-front means that per-row processing threads find their breakpoints already
-    cached and do not contend on ``_breakpoint_cache_lock``.
+    cached and do not recompute them.
 
     Duplicate keys are removed first.  Keys whose full cache key (including the
     selection inputs) is already present are skipped.  Cache entries are never
@@ -179,9 +193,8 @@ def preheat_breakpoint_cache(
                 prioritized_sites_of_infection,
                 user_defined_breakpoints,
             ),
-            _MISSING,
         )
-        is _MISSING
+        is MISSING
     ]
     if not keys_to_load:
         return
@@ -224,7 +237,7 @@ class AntibioticSpecificInterpretationRules:
     Measurement modifiers (``"<"``, ``"<="`, ``">"``) are handled by doubling or
     halving the numeric value before comparison.
 
-    Thread safety: All cache interactions are protected by module-level locks.
+    Thread safety: the module-level caches are internally locked.
     """
 
     def __init__(
@@ -270,17 +283,18 @@ class AntibioticSpecificInterpretationRules:
         if not parsed:
             self.numeric_result = Decimal(0)
 
-        with _intrinsic_cache_lock:
-            cache_org = _intrinsic_cache.setdefault(whonet_organism_code, {})
-            cache_guideline = cache_org.setdefault(abx.guideline, {})
-            if abx.code not in cache_guideline:
+        self.most_applicable_intrinsic: ExpectedResistancePhenotypeRule | None = None
+        if use_intrinsic_resistance_rules:
+            intrinsic_key = (whonet_organism_code, abx.guideline, abx.code)
+            cached_rule = _intrinsic_cache.get(intrinsic_key)
+            if cached_rule is MISSING:
                 rules = get_applicable_expected_resistance_rules(
                     whonet_organism_code,
                     [abx.guideline],
                     [abx.code],
                 )
-                cache_guideline[abx.code] = rules[0] if rules else None
-            self.most_applicable_intrinsic = cache_guideline[abx.code]
+                cached_rule = _intrinsic_cache.add(intrinsic_key, rules[0] if rules else None)
+            self.most_applicable_intrinsic = cached_rule  # type: ignore[assignment]
 
         self.most_applicable_breakpoint: Breakpoint | None = None
         if self.numeric_result > 0:
@@ -430,11 +444,9 @@ def _determine_most_applicable_breakpoint(
 ) -> Breakpoint | None:
     """Look up (or compute and cache) the single best breakpoint for a drug–organism pair.
 
-    Uses a double-checked locking pattern:
-
-    1. Fast lockless read — returns immediately on a cache hit.
-    2. Expensive computation outside the lock.
-    3. Write under ``_breakpoint_cache_lock`` with a second check to handle races.
+    1. Cache hit — return immediately.
+    2. Miss — compute outside the cache lock (the expensive part).
+    3. Store first-writer-wins, so concurrent misses agree on one value.
 
     Returns:
         The highest-priority :class:`~amrie.breakpoint.Breakpoint`, or ``None``
@@ -450,9 +462,8 @@ def _determine_most_applicable_breakpoint(
         user_defined_breakpoints,
     )
 
-    # Fast path: lockless read (dict.get is atomic in CPython)
-    cached = _breakpoint_cache.get(cache_key, _MISSING)
-    if cached is not _MISSING:
+    cached = _breakpoint_cache.get(cache_key)
+    if cached is not MISSING:
         return cached  # type: ignore[return-value]
 
     # Compute outside the lock — the expensive part
@@ -468,6 +479,4 @@ def _determine_most_applicable_breakpoint(
     )
     most = bps[0] if bps else None
 
-    # Write under lock; setdefault keeps the first writer's value on a race
-    with _breakpoint_cache_lock:
-        return _breakpoint_cache.setdefault(cache_key, most)
+    return _breakpoint_cache.add(cache_key, most)
