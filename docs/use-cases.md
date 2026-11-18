@@ -1,294 +1,426 @@
-# Use Cases
+# Use cases and recipes
 
-Practical examples covering common integration patterns.
+Working solutions for common tasks. Each recipe is self-contained; results shown are
+real output with the bundled data.
 
----
+| # | Recipe |
+|---|---|
+| 1 | [Interpret one result](#1-interpret-one-result) |
+| 2 | [Interpret a WHONET export](#2-interpret-a-whonet-export) |
+| 3 | [Excel / CSV files](#3-excel--csv-files) |
+| 4 | [Interpret records already in memory (pandas, databases, HL7)](#4-interpret-records-already-in-memory) |
+| 5 | [Resistance rates per organism and drug](#5-resistance-rates-per-organism-and-drug) |
+| 6 | [Re-interpret historic data with a different year](#6-re-interpret-historic-data-with-a-different-year) |
+| 7 | [See what changed between breakpoint years](#7-see-what-changed-between-breakpoint-years) |
+| 8 | [Compare CLSI and EUCAST on the same isolates](#8-compare-clsi-and-eucast-on-the-same-isolates) |
+| 9 | [CSF / meningitis specimens](#9-csf--meningitis-specimens) |
+| 10 | [Veterinary laboratory](#10-veterinary-laboratory) |
+| 11 | [Surveillance with ECOFFs](#11-surveillance-with-ecoffs) |
+| 12 | [Local breakpoints for a new drug (`X_1`)](#12-local-breakpoints-for-a-new-drug-x_1) |
+| 13 | [Override a guideline breakpoint locally](#13-override-a-guideline-breakpoint-locally) |
+| 14 | [Audit which rule or breakpoint produced each result](#14-audit-which-rule-or-breakpoint-produced-each-result) |
+| 15 | [Method comparison without intrinsic rules](#15-method-comparison-without-intrinsic-rules) |
+| 16 | [QC log checks](#16-qc-log-checks) |
+| 17 | [Call AMRIE from another language](#17-call-amrie-from-another-language) |
+| 18 | [A long-running interpretation service](#18-a-long-running-interpretation-service) |
 
-## 1. Interpret a single measurement
-
-The simplest use case — one organism, one drug, one result.
+All Python snippets assume:
 
 ```python
-from amrie import interpret_single
+from amrie import interpret_single, interpret_file
 from amrie.config import read_configuration
-
 config = read_configuration("src/amrie/resources/SampleConfig.json")
-
-# Disk diffusion
-print(interpret_single(config, "ent", "PEN_ND10", "19"))   # "S"
-print(interpret_single(config, "ent", "PEN_ND10", "06"))   # "R"
-print(interpret_single(config, "ent", "ERY_ND15", "17"))   # "I"
-
-# MIC
-print(interpret_single(config, "eco", "AMP_NM", "4"))      # "S"
-print(interpret_single(config, "eco", "AMP_NM", "64"))     # "R"
-
-# MIC with < / > modifiers
-print(interpret_single(config, "eco", "AMP_NM", "<4"))     # "S"
-print(interpret_single(config, "eco", "AMP_NM", ">16"))    # "R"
-
-# Intrinsic resistance (Klebsiella is inherently resistant to ampicillin)
-print(interpret_single(config, "kpn", "AMP_ND10", "20"))   # "R*"
 ```
 
 ---
 
-## 2. Interpret a batch file
+## 1. Interpret one result
 
-Read a pipe-delimited input file and write a tab-delimited output file with `_INTERP` columns added.
-
-```python
-from amrie import interpret_file
-from amrie.config import read_configuration
-
-config = read_configuration("config.json")
-interpret_file(config, "input.txt", "output.txt", delimiter="|")
-```
-
-### With year override
-
-Override the guideline year without editing the config file:
-
-```python
-interpret_file(config, "input.txt", "output.txt", delimiter="|", guideline_year=2024)
-```
-
-### Vertical output (one row per antibiotic)
-
-```json
-// config.json
-{
-  "HorizontalAntibioticResults": false,
-  ...
-}
+```bash
+amrie single -c src/amrie/resources/SampleConfig.json --organism eco --antibiotic AMP_ND10 -m 19 -o r.json
+# S
 ```
 
 ```python
-interpret_file(config, "input.txt", "output_vertical.txt", delimiter="|")
+interpret_single(config, "eco", "AMP_ND10", "19")    # 'S'
+interpret_single(config, "eco", "AMP_NM", "<=16")    # 'S?'
+interpret_single(config, "kpn", "AMP_ND10", "25")    # 'R*'
 ```
 
 ---
 
-## 3. QC reference strain evaluation
+## 2. Interpret a WHONET export
 
-Check that your test system is within acceptable limits for a reference strain.
+WHONET exports are pipe-delimited with one column per test:
 
-```python
-from amrie import interpret_qc_single
-
-print(interpret_qc_single("atcc25922", "SAM_ND10", "22"))  # "IN"
-print(interpret_qc_single("atcc25922", "SAM_ND10", "18"))  # "OUT"
-print(interpret_qc_single("atcc25922", "SAM_ND10", ""))    # ""  (blank measurement)
-print(interpret_qc_single("unknown",   "SAM_ND10", "22"))  # ""  (unknown strain)
+```bash
+amrie file -c src/amrie/resources/SampleConfig.json -d "|" \
+           -i src/amrie/resources/SampleInputFile.txt -o sample_out.txt
 ```
 
-### Access the QC range directly
-
-```python
-from amrie.qc import get_applicable_quality_control_range
-
-qc_range = get_applicable_quality_control_range("atcc25922", "SAM_ND10")
-if qc_range:
-    print(f"Acceptable range: {qc_range.MINIMUM}–{qc_range.MAXIMUM} mm")
-    print(f"Guideline: {qc_range.GUIDELINE} {qc_range.YEAR}")
-```
+All 71 input columns are kept; each of the 43 antibiotic columns gets an `_INTERP`
+partner. Use `"HorizontalAntibioticResults": false` for one row per result.
 
 ---
 
-## 4. User-defined breakpoints
+## 3. Excel / CSV files
 
-Override a specific organism / drug breakpoint with your own values.
+Excel "CSV UTF-8" files start with a byte-order mark and use `,` — or `;` in many
+European locales. Both work:
 
-Create `my_breakpoints.txt` (same column structure as `Breakpoints.txt`):
-
+```bash
+amrie file -c my-config.json -d "," -i export.csv -o results.txt
+amrie file -c my-config.json -d ";" -i export.csv -o results.txt
 ```
-GUIDELINES  YEAR  TEST_METHOD  POTENCY  ORGANISM_CODE  ORGANISM_CODE_TYPE  BREAKPOINT_TYPE  HOST  SITE_OF_INFECTION  REFERENCE_TABLE  REFERENCE_SEQUENCE  WHONET_ABX_CODE  WHONET_TEST  R  I  SDD  S  ECV_ECOFF  ECV_ECOFF_TENTATIVE  DATE_ENTERED  DATE_MODIFIED  COMMENTS
-UserDefined  2026  DISK  10µg  afb  WHONET_ORG_CODE  Human  Human    Internal  1  AMP  AMP_ND10  20   21-27  28  0  2026-01-01
-```
 
-Configure the path:
-
-```json
-{
-  "UserDefinedBreakpointsFile": "my_breakpoints.txt"
-}
-```
+Make sure the header says `ORGANISM` (upper case) and that test columns use WHONET
+names (`AMP_ND10`, not "Ampicillin"). Rename columns once in Excel, or in Python:
 
 ```python
-from amrie.config import read_configuration, InterpretationConfiguration
-from amrie import interpret_single
-
-config = read_configuration("config_with_udb.json")
-
-# User-defined breakpoint applies: S≥28, I=21-27, R≤20
-print(interpret_single(config, "afb", "PEN_ND10", "19"))  # "R"
-print(interpret_single(config, "afb", "PEN_ND10", "28"))  # "S"
+import pandas as pd
+df = pd.read_csv("export.csv", dtype=str, keep_default_na=False)
+df = df.rename(columns={"Organism": "ORGANISM", "Ampicillin (mm)": "AMP_ND10", "Cefotaxime (mm)": "CTX_ND30"})
+df.to_csv("export_whonet.txt", sep="|", index=False)
 ```
+
+The output is always tab-delimited; open it in Excel with *Data → From Text*.
 
 ---
 
-## 5. ESBL-confirmed isolates
+## 4. Interpret records already in memory
 
-Enable the ESBL-CONFIRMED expert rule to automatically mark all affected beta-lactams as `R!` when the `ESBL` column is `+`.
-
-```json
-{
-  "EnabledExpertInterpretationRules": ["ESBL-CONFIRMED"],
-  "IncludeInterpretationComments": true
-}
-```
+No files needed — give `IsolateInterpretation` a dict per isolate:
 
 ```python
 from amrie.isolate import IsolateInterpretation
-from amrie.config import read_configuration
 
-config = read_configuration("esbl_config.json")
+def interpret_record(record: dict, year: int = 2026) -> dict:
+    values = {k: str(v) for k, v in record.items() if v not in (None, "")}
+    return IsolateInterpretation(values, list(values), config.enabled_expert_interpretation_rules,
+                                 config.user_defined_breakpoints, guideline_year=year,
+                                 prioritized_breakpoint_types=config.prioritized_breakpoint_types
+                                 ).get_all_interpretations()
 
-row = {
-    "ORGANISM": "eco",
-    "ESBL": "+",
-    "MOX_ND30": "25",   # Moxalactam, measures cephalosporin resistance
-}
-
-results = IsolateInterpretation(
-    row,
-    list(row.keys()),
-    config.enabled_expert_interpretation_rules,
-    config.user_defined_breakpoints,
-    guideline_year=int(config.guideline_year),
-).get_all_interpretations()
-
-print(results["MOX_ND30"])   # "R!"
+interpret_record({"ORGANISM": "sau", "FOX_ND30": 15, "PEN_ND10": 35, "VAN_NM": 1})
+# {'FOX_ND30': 'R!', 'PEN_ND10': 'R!', 'VAN_NM': 'S'}
 ```
 
----
-
-## 6. Disabling intrinsic resistance rules
-
-For research purposes you may want to see the breakpoint-based result even for drug–bug combinations that are normally flagged as intrinsically resistant.
+With pandas:
 
 ```python
-from amrie.config import InterpretationConfiguration
-from amrie import interpret_single
+import pandas as pd
+df = pd.DataFrame([
+    {"ORGANISM": "eco", "AMP_ND10": "19", "CTX_ND30": "20"},
+    {"ORGANISM": "kpn", "AMP_ND10": "25", "CTX_ND30": "30"},
+])
+interp = pd.DataFrame([interpret_record(r) for r in df.to_dict("records")]).add_suffix("_INTERP")
+df.join(interp)
+#   ORGANISM AMP_ND10 CTX_ND30 CTX_ND30_INTERP AMP_ND10_INTERP
+# 0      eco       19       20               R               S
+# 1      kpn       25       30               S              R*
+```
 
-config = InterpretationConfiguration(
-    use_intrinsic_resistance_rules=False,
-    guideline_year=2026,
-    prioritized_breakpoint_types=["Human", "Animal", "ECOFF"],
-)
+For many rows at once (parallel, cache pre-heated), use `interpret_isolates`:
 
-# Normally R* (intrinsic), now returns S/I/R based on the breakpoint
-print(interpret_single(config, "kpn", "AMP_ND10", "20"))  # "S"
-print(interpret_single(config, "kpn", "AMP_ND10", "06"))  # "R"
+```python
+from amrie.io_library import interpret_isolates
+rows = df.to_dict("records")
+results = interpret_isolates(config, list(df.columns), rows)   # [(row, interpretations), …]
 ```
 
 ---
 
-## 7. Site-of-infection prioritisation
+## 5. Resistance rates per organism and drug
 
-Use `PrioritizedSitesOfInfection` to select the most clinically relevant breakpoint when multiple site-specific breakpoints exist for the same drug.
+```python
+from collections import Counter, defaultdict
+from amrie.io_library import load_input_file, interpret_isolates
+
+columns, rows = load_input_file("src/amrie/resources/SampleInputFile.txt", "|")
+results = interpret_isolates(config, columns, rows)
+
+tally = defaultdict(Counter)
+for row, interp in results:
+    for test, value in interp.items():
+        if value:
+            tally[(row["ORGANISM"], test)][value.rstrip("*!?")] += 1
+
+for (org, test), counts in sorted(tally.items(), key=lambda kv: -sum(kv[1].values()))[:6]:
+    n = sum(counts.values())
+    print(f"{org} {test:9} n={n} %R={100 * counts['R'] / n:.1f}")
+```
+
+```text
+scn GEN_ND10  n=105 %R=18.1
+scn CIP_ND5   n=105 %R=33.3
+scn ERY_ND15  n=105 %R=51.4
+scn SXT_ND1_2 n=105 %R=35.2
+scn CLI_ND2   n=105 %R=26.7
+scn PEN_ND10  n=105 %R=76.2
+```
+
+(`scn` = coagulase-negative staphylococci, the most frequent organism in the sample.)
+For surveillance reporting, de-duplicate to the first isolate per patient first, as
+CLSI M39 recommends.
+
+---
+
+## 6. Re-interpret historic data with a different year
+
+The breakpoints in force when the data were produced:
+
+```python
+interpret_file(config, "lab_2019.txt", "lab_2019_out.txt", delimiter="|", guideline_year=2019)
+```
+
+or a config with `"GuidelineYear": 2019`. Or re-interpret old data with **current**
+breakpoints (the default, 2026) to make a time series comparable.
+
+---
+
+## 7. See what changed between breakpoint years
+
+```python
+import dataclasses
+from collections import Counter
+from amrie.io_library import load_input_file, interpret_isolates
+
+columns, rows = load_input_file("src/amrie/resources/SampleInputFile.txt", "|")
+new = interpret_isolates(config, columns, rows)                                        # 2026
+old = interpret_isolates(dataclasses.replace(config, guideline_year=2020), columns, rows)
+
+changes = Counter(
+    (row["ORGANISM"], test, before[test], after.get(test))
+    for (row, before), (_, after) in zip(old, new)
+    for test in before if before[test] != after.get(test)
+)
+sum(changes.values())        # 181
+changes.most_common(4)
+# [(('eco', 'PIP_ND100', 'S', ''), 24), (('hin', 'AMC_ND20', 'S', ''), 23),
+#  (('pmi', 'PIP_ND100', 'S', ''), 13), (('kpn', 'PIP_ND100', 'S', ''), 10)]
+```
+
+181 results differ between the 2020 and 2026 CLSI tables for the sample — most because
+breakpoints for those disk tests are no longer published (`S` → blank).
+
+---
+
+## 8. Compare CLSI and EUCAST on the same isolates
+
+The guideline is part of the column name, so re-code the columns:
+
+```python
+def to_eucast(name: str) -> str:
+    return name[:4] + "E" + name[5:] if len(name) > 5 and name[3] == "_" and name[4] == "N" else name
+
+e_columns = [to_eucast(c) for c in columns]
+e_rows = [{to_eucast(k): v for k, v in r.items()} for r in rows]
+eucast = interpret_isolates(config, e_columns, e_rows)
+
+disagree = Counter(
+    (test[:3], clsi, e[to_eucast(test)])
+    for (_, c), (_, e) in zip(new, eucast)
+    for test, clsi in c.items()
+    if clsi and e.get(to_eucast(test)) and clsi != e[to_eucast(test)]
+)
+sum(disagree.values())       # 506
+disagree.most_common(3)      # [(('CIP', 'S', 'I'), 157), (('IPM', 'S', 'I'), 47), (('ATM', 'S', 'I'), 41)]
+```
+
+Disk potencies differ between guidelines for some drugs; only tests with the same
+potency in both can be compared this way.
+
+---
+
+## 9. CSF / meningitis specimens
+
+```json
+{ "PrioritizedBreakpointTypes": ["Human"], "PrioritizedSitesOfInfection": ["Meningitis"] }
+```
+
+| `spn PEN_NM` | general config | meningitis config |
+|---|---|---|
+| 0.06 | S | S |
+| 0.12 | S | **R** |
+| 4 | I | **R** |
+
+Split files by specimen type and run each with its own config, or in Python:
+
+```python
+import dataclasses
+csf = dataclasses.replace(config, prioritized_sites_of_infection=["Meningitis"])
+csf.update_sites_of_infection()
+CSF_CODES = {"sf"}            # your laboratory's specimen code(s) for CSF
+spec_config = lambda row: csf if row.get("SPEC_TYPE") in CSF_CODES else config
+```
+
+---
+
+## 10. Veterinary laboratory
+
+```json
+{ "PrioritizedBreakpointTypes": ["Animal", "Human", "ECOFF"] }
+```
+
+Enrofloxacin has no human breakpoint: `eco ENR_ND5 20` → `I` with Animal allowed,
+blank with `["Human"]`. AMRIE has no host setting — among veterinary breakpoints the
+alphabetically first host is used (*Cats* before *Poultry*), see
+[Breakpoint selection](breakpoint-selection.md#step-2-sort). For a specific species,
+add user-defined breakpoints (recipe 13).
+
+---
+
+## 11. Surveillance with ECOFFs
 
 ```json
 {
-  "PrioritizedSitesOfInfection": ["Meningitis"],
-  "GuidelineYear": 2026
+  "PrioritizedBreakpointTypes": ["ECOFF"],
+  "UseIntrinsicResistanceRules": false,
+  "EnabledExpertInterpretationRules": ["NONE"],
+  "HorizontalAntibioticResults": false
 }
 ```
 
 ```python
-from amrie.config import InterpretationConfiguration
-from amrie import interpret_single
-
-config = InterpretationConfiguration(
-    guideline_year=2026,
-    prioritized_breakpoint_types=["Human"],
-    prioritized_sites_of_infection=["Meningitis"],
-)
-# Penicillin S breakpoint for meningitis is lower (more stringent) than non-meningitis
-result = interpret_single(config, "spn", "PEN_NM", "0.125")
+ecoff = dataclasses.replace(config, prioritized_breakpoint_types=["ECOFF"])
+interpret_single(ecoff, "eco", "AMP_NM", "8")     # 'WT'
+interpret_single(ecoff, "eco", "AMP_NM", "32")    # 'NWT'
 ```
 
 ---
 
-## 8. Programmatic pipeline without a config file
+## 12. Local breakpoints for a new drug (`X_1`)
 
-Skip the JSON file entirely and build the configuration in code.
+Call the new drug `X_1` in your data (`X_1_NM` for a CLSI-style MIC column) and give
+it breakpoints. `local-breakpoints.txt` (tab-delimited, 21 columns):
+
+```text
+GUIDELINES	YEAR	TEST_METHOD	POTENCY	ORGANISM_CODE	ORGANISM_CODE_TYPE	BREAKPOINT_TYPE	HOST	SITE_OF_INFECTION	REFERENCE_TABLE	REFERENCE_SEQUENCE	WHONET_ABX_CODE	WHONET_TEST	R	I	SDD	S	ECV_ECOFF	DATE_ENTERED	DATE_MODIFIED	COMMENTS
+User-defined	2026	MIC		EBC	FAMILY_CODE	Human	Human		Local study	1	X_1	X_1_NM	8	4		2		2026-11-18		Local validation 2026
+```
+
+(Enterobacterales, S ≤ 2, I 4, R ≥ 8.)
+
+```json
+{ "UserDefinedBreakpointsFile": "/srv/amrie/local-breakpoints.txt" }
+```
+
+| `X_1_NM` for `eco` | 1 | 2 | 4 | 8 | 16 | `<=2` | `>8` |
+|---|---|---|---|---|---|---|---|
+| result | S | S | I | R | R | S | R |
+
+The breakpoint applies to every Enterobacterales and every guideline year; *S. aureus*
+stays blank. Python, without a config file:
 
 ```python
-from amrie.config import InterpretationConfiguration
-from amrie.io_library import load_input_file, interpret_isolates, generate_output_file
-
-config = InterpretationConfiguration(
-    guideline_year=2026,
-    prioritized_breakpoint_types=["Human"],
-    include_interpretation_comments=True,
-    enabled_expert_interpretation_rules=None,   # all rules
-)
-
-columns, rows = load_input_file("data.txt", delimiter="|")
-results = interpret_isolates(config, columns, rows)
-generate_output_file("output.txt", config, columns, results)
+from amrie.breakpoint import load_breakpoints
+config.user_defined_breakpoints = load_breakpoints("local-breakpoints.txt", user_defined=True)
 ```
 
 ---
 
-## 9. Sequential vs. parallel interpretation
+## 13. Override a guideline breakpoint locally
 
-By default `interpret_isolates` uses `ThreadPoolExecutor` for batches of two or more rows. Force sequential processing for debugging or deterministic output order:
+A user-defined row for an existing test **wins over** the built-in breakpoint for the
+organisms it covers. To use, say, a local ampicillin disk breakpoint for
+Enterobacterales, add a row with `WHONET_TEST = AMP_ND10`, `ORGANISM_CODE = EBC`,
+`ORGANISM_CODE_TYPE = FAMILY_CODE` and your R/I/S. Because user-defined rows ignore
+the year, the override applies to every `GuidelineYear`; keep separate files per
+validation period if needed.
 
-```python
-results = interpret_isolates(config, columns, rows, parallel=False)
+---
+
+## 14. Audit which rule or breakpoint produced each result
+
+Turn comments on and use the long layout, then filter:
+
+```json
+{ "IncludeInterpretationComments": true, "HorizontalAntibioticResults": false }
 ```
 
-Verify that both give identical results:
+```bash
+awk -F'\t' 'NR==1 || $NF ~ /[*!]$/' results.txt     # only inferred results
+```
+
+For the exact breakpoint behind a result:
 
 ```python
-seq = interpret_isolates(config, columns, rows, parallel=False)
-par = interpret_isolates(config, columns, rows, parallel=True)
-assert seq == par
+from amrie.antibiotic_rules import AntibioticSpecificInterpretationRules as Rules
+
+r = Rules("eco", "AMP_ND10", "19", [], guideline_year=2026)
+b = r.most_applicable_breakpoint
+f"{r.get_interpretation()} via {b.GUIDELINES} {b.YEAR} {b.REFERENCE_TABLE} {b.ORGANISM_CODE}/{b.ORGANISM_CODE_TYPE} S>={b.S} R<={b.R}"
 ```
 
 ---
 
-## 10. Inspecting breakpoints and rules directly
+## 15. Method comparison without intrinsic rules
 
 ```python
-from amrie.breakpoint import get_applicable_breakpoints
-from amrie import constants as C
-
-# All CLSI 2026 Human breakpoints for E. coli / ampicillin disk
-bps = get_applicable_breakpoints(
-    "eco",
-    user_defined_breakpoints=[],
-    prioritized_guidelines=["CLSI"],
-    prioritized_guideline_years=[2026],
-    prioritized_breakpoint_types=["Human"],
-    prioritized_sites_of_infection=list(C.SitesOfInfection.DEFAULT_ORDER),
-    prioritized_whonet_abx_full_drug_codes=["AMP_ND10"],
-)
-for bp in bps:
-    print(f"R≤{bp.R}  S≥{bp.S}  site={bp.SITE_OF_INFECTION!r}")
+raw = dataclasses.replace(config, use_intrinsic_resistance_rules=False, enabled_expert_interpretation_rules=[])
+interpret_single(raw, "kpn", "AMP_ND10", "25")    # 'S'   breakpoint only (normally R*)
+interpret_single(raw, "sau", "FOX_ND30", "15")    # 'R'   no MRS (normally R!)
 ```
 
-```python
-from amrie.expected_resistance import get_applicable_expected_resistance_rules
+---
 
-# What is Klebsiella intrinsically resistant to?
-rules = get_applicable_expected_resistance_rules("kpn", ["CLSI"])
-for r in rules:
-    print(r.ABX_CODE)
+## 16. QC log checks
+
+See [Quality control → batch QC](quality-control.md#batch-qc-from-a-file).
+
+---
+
+## 17. Call AMRIE from another language
+
+Run `amrie-web` and use the REST API.
+
+**JavaScript**
+
+```javascript
+const res = await fetch("http://localhost:8080/api/interpret/single", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    organism_code: "eco", whonet_abx_code: "AMP", measurement: "19",
+    guidelines: ["CLSI"], test_method: "disk", potency: "10", guideline_year: 2026,
+  }),
+});
+console.log((await res.json()).results);   // [{ whonet_test: "AMP_ND10", interpretation: "S" }]
 ```
 
-```python
-from amrie.expert_rule import get_applicable_expert_rules, EXPERT_INTERPRETATION_RULES
+**R**
 
-# Which expert rules apply to E. coli when ESBL column is present?
-rules = get_applicable_expert_rules(
-    "eco",
-    antimicrobial_codes=["CTX_ND30"],
-    other_tests=["ESBL"],
-    enabled_expert_interpretation_rules=None,
-)
-for r in rules:
-    print(r.RULE_CODE, r.CriteriaOperator)
+```r
+library(httr2)
+request("http://localhost:8080/api/interpret/single") |>
+  req_body_json(list(organism_code = "eco", whonet_abx_code = "AMP", measurement = "19",
+                     guidelines = list("CLSI"), test_method = "disk", potency = "10",
+                     guideline_year = 2026)) |>
+  req_perform() |> resp_body_json()
+```
+
+Or shell out to the CLI (`amrie file …`) for batch work.
+
+---
+
+## 18. A long-running interpretation service
+
+Importing `amrie` costs about a second; after that, lookups are cached. In a service:
+
+- import once at start-up and load configurations once;
+- share them across threads — the engine is thread-safe;
+- the breakpoint cache is bounded (262,144 entries) and keyed on every setting, so
+  serving many different configurations is safe;
+- monitor it with `amrie.antibiotic_rules.cache_statistics()`.
+
+```python
+from concurrent.futures import ThreadPoolExecutor
+from amrie.isolate import IsolateInterpretation
+
+def job(record):
+    return IsolateInterpretation(record, list(record), None, [], guideline_year=2026).get_all_interpretations()
+
+records = [{"ORGANISM": "eco", "AMP_ND10": "19"}, {"ORGANISM": "kpn", "AMP_ND10": "25"}]
+with ThreadPoolExecutor() as pool:
+    results = list(pool.map(job, records))      # [{'AMP_ND10': 'S'}, {'AMP_ND10': 'R*'}]
 ```

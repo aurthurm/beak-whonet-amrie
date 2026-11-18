@@ -1,187 +1,246 @@
-# Expert Interpretation Rules
+# Expert interpretation rules (`R!`)
 
-## What are expert rules?
+Expert rules infer resistance from **other results on the same isolate**. A
+cefoxitin-resistant *S. aureus* is MRSA, so it must be reported resistant to the
+β-lactams on its panel even if their zones look susceptible. AMRIE evaluates the
+rules per isolate and marks every affected result **`R!`**.
 
-Expert interpretation rules (sometimes called "phenotypic inference rules") infer resistance to a **set of antibiotics** based on an observed resistance pattern in the same isolate. When a rule fires, all antibiotics in its `AFFECTED_ANTIBIOTICS` list are marked `R!` — resistant with the exclamation-point suffix indicating that the result was driven by a rule rather than a direct breakpoint comparison.
-
-Expert rules are applied **before** breakpoint interpretation. Once a drug has been marked `R!` by an expert rule, it is not re-interpreted by normal breakpoints.
+- [The five rules at a glance](#the-five-rules-at-a-glance)
+- [How rules are evaluated](#how-rules-are-evaluated)
+- [MRS — methicillin-resistant *Staphylococcus*](#mrs--methicillin-resistant-staphylococcus)
+- [ESBL-CONFIRMED](#esbl-confirmed)
+- [ESBL-AMPC-PROBABLE](#esbl-ampc-probable)
+- [BLNAR-HFLU](#blnar-hflu)
+- [ICR — inducible clindamycin resistance](#icr--inducible-clindamycin-resistance)
+- [Enabling and disabling rules](#enabling-and-disabling-rules)
+- [Input requirements](#input-requirements)
+- [Reading the output](#reading-the-output)
+- [Looking rules up](#looking-rules-up)
 
 ---
 
-## Processing sequence
+## The five rules at a glance
+
+Exactly as they are in `src/amrie/resources/ExpertInterpretationRules.txt`:
+
+| Code | Organisms | Fires when | Marks `R!` |
+|---|---|---|---|
+| `MRS` | *Staphylococcus* (`STA`, genus) | `MECA_PCR=+` **or** `MRSA=+` **or** `OXA_SCREEN=+` **or** `MRSA_SCRN=+` **or** `PBP2A_AGGL=+` | 140 β-lactams (penicillins, cephems, monobactams, penems, β-lactam/inhibitor combinations), **except** ceftaroline `CPT` and ceftobiprole `BPR` |
+| `MRS` (2nd row) | *Staphylococcus* | oxacillin `OXA` **or** cefoxitin `FOX` is **NS** (I or R) | same 140 |
+| `ESBL-CONFIRMED` | Enterobacterales (`EBC`, family) | `ESBL=+` **or** `X_BLEE=p` | `MOX`, `CID`, `MAN`, `CFP` |
+| `ESBL-AMPC-PROBABLE` | Enterobacterales | any 3rd-generation cephalosporin (`CEPH3`) is **R** | `MOX`, `CID`, `MAN`, `CFP` |
+| `BLNAR-HFLU` | *H. influenzae* (`HIN`, serovar group) | `BETA_LACT=-` **and** ampicillin `AMP` is **NS** | `AMC`, `SAM`, `CEC`, `CAT`, `CID`, `CPR`, `CXM`, `CXA`, `TZP` |
+| `ICR` | *Staphylococcus* and *Streptococcus* (`STA`, `STR`) | `INDUC_CLI=+` **or** `MLS_DTEST=+` **or** `X_MLS=p` **or** `X_MLS_IND=p` | 33 macrolides, lincosamides and streptogramins |
+
+Drug codes: `MOX` latamoxef (moxalactam), `CID` cefonicid, `MAN` cefamandole, `CFP`
+cefoperazone, `AMC` amoxicillin/clavulanate, `SAM` ampicillin/sulbactam, `CEC`
+cefaclor, `CXM` cefuroxime, `TZP` piperacillin/tazobactam.
+
+> The ESBL rules in the upstream data affect only the four cephalosporins listed —
+> not all β-lactams. A confirmed ESBL *E. coli* with cefotaxime 30 mm stays `S` for
+> cefotaxime. Check this against your laboratory's reporting policy.
+
+---
+
+## How rules are evaluated
 
 For each isolate row:
 
-1. Find applicable expert rules (organism scope + fields present).
-2. For each applicable rule, ensure all **precondition antibiotics** have a breakpoint-based interpretation (so the rule can evaluate resistance patterns).
-3. Evaluate the rule's criteria against the computed interpretations.
-4. If the criteria are satisfied, mark all `AFFECTED_ANTIBIOTICS` as `R!`.
-5. Continue with normal breakpoint interpretation for any remaining antibiotics.
+1. **Find candidate rules** — enabled rules whose organism scope covers the isolate
+   and whose criteria mention at least one test present in the row.
+2. **Make sure the drugs in the criteria are interpreted** — e.g. for MRS row 2,
+   `OXA_*` and `FOX_*` columns are interpreted first (breakpoints + intrinsic rules).
+   Drug criteria are matched by exact drug code (`FOX` matches `FOX_ND30`,
+   `FOX_NM`…, never `OXA_SCREEN` or `X_12` for `X_1`).
+3. **Evaluate the criteria**:
+   - a drug criterion `= R` is met if one of that drug's results is `R`;
+   - a drug criterion `= NS` is met if one is `R` or `I`;
+   - `CEPH3 = R` is met if any 3rd-generation cephalosporin result is `R`;
+   - a test criterion (`ESBL=+`) is met if the column's value is exactly `+`;
+   - criteria are combined with the rule's `AND` / `OR`.
+4. **Apply** — every affected drug **present in the row** gets `R!`, overriding its
+   own result, including `S`. Drugs not tested are not added.
+5. Remaining drugs are interpreted normally.
+
+Rules only run within one isolate (one row). In `interpret_single` there is only one
+drug, so a rule fires only if that drug is both a trigger and affected (cefoxitin for
+MRS) — use a full row (`IsolateInterpretation`, `amrie file`) to see a rule's full
+effect.
 
 ---
 
-## Available rules
+## MRS — methicillin-resistant *Staphylococcus*
 
-### `ESBL-CONFIRMED`
+Two rows, both affecting the same β-lactam list.
 
-| | |
-|---|---|
-| **Code** | `ESBL-CONFIRMED` |
-| **Organisms** | *Enterobacterales* |
-| **Trigger** | `ESBL` column = `"+"` |
-| **Operator** | AND |
-| **Effect** | Marks all penicillins, cephalosporins, monobactams, penems, and beta-lactam+inhibitor combinations as `R!` |
+**By phenotype** — cefoxitin disk 15 mm (*S. aureus* R ≤ 21):
 
-Used when a laboratory has confirmed ESBL production via a phenotypic or genotypic confirmatory test and has entered `+` in the `ESBL` column.
-
-**Config to enable:**
-
-```json
-"EnabledExpertInterpretationRules": ["ESBL-CONFIRMED"]
+```text
+Input   ORGANISM=sau  FOX_ND30=15  PEN_ND10=35  VAN_NM=1
+Output  FOX_ND30 R!   PEN_ND10 R!   VAN_NM S
 ```
 
-**Input requirement:** The input file must include an `ESBL` column.
+Penicillin at 35 mm would be `S` on its own; vancomycin is not a β-lactam and keeps
+its own result.
+
+**By genotype / screen** — `MECA_PCR=+`, even with nothing else resistant:
+
+```text
+Input   ORGANISM=sau  MECA_PCR=+  PEN_ND10=35  CPT_ND30=25  VAN_NM=1
+Output  PEN_ND10 R!   CPT_ND30 S   VAN_NM S
+```
+
+Ceftaroline (`CPT`) keeps its own result: it is active against MRSA, which is why the
+rule excludes it (and ceftobiprole `BPR`).
+
+**Without MRS enabled** the same first row gives `FOX_ND30 R`, `PEN_ND10 S`.
 
 ---
 
-### `ESBL-AMPC-PROBABLE`
+## ESBL-CONFIRMED
 
-| | |
-|---|---|
-| **Code** | `ESBL-AMPC-PROBABLE` |
-| **Organisms** | *Enterobacterales* |
-| **Trigger** | Any **3rd-generation cephalosporin** (CEPH3 class) interpretation = `R` or `NS` |
-| **Operator** | AND |
-| **Effect** | Marks all ESBL-affected drugs as `R!` |
+Use when the laboratory has confirmed ESBL production (phenotypic confirmation test or
+genotype) and records `+` in `ESBL` (or `p` in `X_BLEE`).
 
-Infers probable ESBL/AmpC production when at least one 3rd-generation cephalosporin is resistant, even without a confirmatory test. The CEPH3 drugs are identified by the `PROF_CLASS = "CEPH3"` field in `Antibiotics.txt`.
+```text
+Input   ORGANISM=eco  ESBL=+  CTX_ND30=30  MAN_ND30=25  AMP_ND10=19  CIP_ND5=30
+Output  MAN_ND30 R!   CTX_ND30 S   AMP_ND10 S   CIP_ND5 S
 
----
-
-### `BLNAR-HFLU`
-
-| | |
-|---|---|
-| **Code** | `BLNAR-HFLU` |
-| **Organisms** | *Haemophilus influenzae* |
-| **Trigger** | Ampicillin (`AMP`) interpretation = `R` AND `BETA_LACT` column = `"-"` (beta-lactamase negative) |
-| **Operator** | AND |
-| **Effect** | Marks ampicillin, amoxicillin, amoxicillin+clavulanate, and other beta-lactams as `R!` |
-
-Identifies beta-lactamase–negative ampicillin-resistant (BLNAR) *H. influenzae*. Both fields (`AMP` disk/MIC result and `BETA_LACT`) must be present in the input file.
+Input   ORGANISM=eco  ESBL=-  CTX_ND30=30  MAN_ND30=25
+Output  CTX_ND30 S    MAN_ND30 S
+```
 
 ---
 
-### `MRS` (Methicillin-Resistant Staphylococcus)
+## ESBL-AMPC-PROBABLE
 
-| | |
-|---|---|
-| **Code** | `MRS` |
-| **Organisms** | *Staphylococcus* |
-| **Trigger** | Oxacillin (`OXA`) or Cefoxitin (`FOX`) or `MECA_PCR` column = `"+"` interpretation = `R` |
-| **Operator** | OR |
-| **Effect** | Marks **all beta-lactam classes** as `R!` (except CPT and BPR) |
+Infers probable ESBL/AmpC production when **any 3rd-generation cephalosporin** is
+resistant — no confirmatory test needed. The 3rd-generation cephalosporins are the
+antibiotics with `PROF_CLASS = CEPH3` in `Antibiotics.txt` (`amrie.antibiotic.CEPH3_ANTIBIOTIC_CODES`).
 
-The affected drug list is computed dynamically from `Antibiotics.txt` — any drug in the Penicillins, Cephems, Cephems-Oral, Monobactams, Penems, Beta-lactam+Inhibitors, or Beta-lactamase inhibitors class is affected, except ceftaroline (CPT) and brilacidin (BPR).
+```text
+Input   ORGANISM=eco  CTX_ND30=20  MAN_ND30=25  CFP_ND75=30
+Output  CTX_ND30 R    MAN_ND30 R!  CFP_ND75 R!
+```
+
+Cefotaxime 20 mm is resistant (CLSI R ≤ 22 for Enterobacterales), which triggers the
+rule.
 
 ---
 
-### `ICR` (Inducible Clindamycin Resistance)
+## BLNAR-HFLU
 
-| | |
-|---|---|
-| **Code** | `ICR` |
-| **Organisms** | *Staphylococcus*, *Streptococcus* |
-| **Trigger** | Erythromycin (`ERY`) or another macrolide interpretation = `R` AND clindamycin or another lincosamide interpretation = `S` |
-| **Operator** | AND |
-| **Effect** | Marks all macrolides, lincosamides, and streptogramins as `R!` |
+β-lactamase-negative, ampicillin-resistant *Haemophilus influenzae*: resistance comes
+from altered PBP3, which also reduces activity of amoxicillin/clavulanate and several
+cephalosporins.
 
-The D-zone test inferring constitutive MLSB resistance. The affected drug list covers the Macrolides, Lincosamides, and Streptogramins classes.
+```text
+Input   ORGANISM=hin  BETA_LACT=-  AMP_ND10=15  AMC_ND20=25  CXM_ND30=25
+Output  AMP_ND10 R    AMC_ND20 R!  CXM_ND30 R!
+
+Input   ORGANISM=hin  BETA_LACT=+  AMP_ND10=15  AMC_ND20=25
+Output  AMP_ND10 R    AMC_ND20 (blank)          ← β-lactamase positive: rule does not fire
+```
+
+Both `BETA_LACT` and an ampicillin result are required (`AND`).
+
+---
+
+## ICR — inducible clindamycin resistance
+
+A positive D-test (erythromycin-induced clindamycin resistance) means clindamycin can
+fail in therapy even though it tests susceptible. Record the D-test in `INDUC_CLI` or
+`MLS_DTEST` (`+`) or `X_MLS` / `X_MLS_IND` (`p`).
+
+```text
+Input   ORGANISM=sau  INDUC_CLI=+  ERY_ND15=25  CLI_ND2=25  VAN_NM=1
+Output  ERY_ND15 R!   CLI_ND2 R!   VAN_NM S
+
+Same input, ICR disabled:
+Output  ERY_ND15 S    CLI_ND2 S
+```
+
+The rule is triggered by the D-test field, not by the erythromycin/clindamycin
+pattern. It applies to staphylococci and streptococci.
 
 ---
 
 ## Enabling and disabling rules
 
-### Enable specific rules
+| JSON `EnabledExpertInterpretationRules` | Effect |
+|---|---|
+| key absent, `null` or `[]` | **all** rules |
+| `["MRS", "ICR"]` | only these |
+| `["NONE"]` (any non-rule value) | no rules |
 
 ```json
-{
-  "EnabledExpertInterpretationRules": ["MRS", "ICR"]
-}
+{ "EnabledExpertInterpretationRules": ["MRS", "ICR", "BLNAR-HFLU"] }
 ```
 
-### Enable all rules
-
-```json
-{
-  "EnabledExpertInterpretationRules": null
-}
-```
-
-Or omit the key entirely.
-
-### Disable all rules
-
-```json
-{
-  "EnabledExpertInterpretationRules": []
-}
-```
-
-### In the Python API
+Python:
 
 ```python
 from amrie.config import InterpretationConfiguration
 from amrie.expert_rule import RuleCodes
 
-# Enable specific rules
-config = InterpretationConfiguration(
-    enabled_expert_interpretation_rules=[
-        RuleCodes.MRSTAPH,
-        RuleCodes.BLNAR,
-        RuleCodes.ICR,
-    ]
-)
-
-# Disable all expert rules
-config = InterpretationConfiguration(
-    enabled_expert_interpretation_rules=[]
-)
-
-# Enable all expert rules
-config = InterpretationConfiguration(
-    enabled_expert_interpretation_rules=None
-)
+InterpretationConfiguration(enabled_expert_interpretation_rules=[RuleCodes.MRSTAPH, RuleCodes.ICR])
+InterpretationConfiguration(enabled_expert_interpretation_rules=None)   # all rules
+InterpretationConfiguration(enabled_expert_interpretation_rules=[])     # no rules (Python only)
 ```
+
+`RuleCodes`: `ESBL_CONFIRMED`, `ESBL_PROBABLE`, `BLNAR`, `MRSTAPH`, `ICR`, `ALL`.
+
+The sample configuration enables `BLNAR-HFLU`, `MRS` and `ICR` and leaves the two
+ESBL rules off.
 
 ---
 
-## Input file requirements
+## Input requirements
 
-| Rule | Required columns |
+| Rule | Needs in the row |
 |---|---|
-| `ESBL-CONFIRMED` | `ORGANISM`, `ESBL`, at least one beta-lactam column |
-| `ESBL-AMPC-PROBABLE` | `ORGANISM`, at least one CEPH3 drug column |
-| `BLNAR-HFLU` | `ORGANISM`, `AMP_*` column, `BETA_LACT` column |
-| `MRS` | `ORGANISM`, `OXA_*` and/or `FOX_*` column |
-| `ICR` | `ORGANISM`, macrolide column (`ERY_*` etc.), lincosamide column (`CLI_*` etc.) |
+| `MRS` | `ORGANISM` (a staphylococcus) + one of `MECA_PCR`, `MRSA`, `OXA_SCREEN`, `MRSA_SCRN`, `PBP2A_AGGL`, an `OXA_…` or a `FOX_…` column |
+| `ESBL-CONFIRMED` | `ORGANISM` (Enterobacterales) + `ESBL` or `X_BLEE` |
+| `ESBL-AMPC-PROBABLE` | `ORGANISM` (Enterobacterales) + at least one 3rd-generation cephalosporin column (`CTX_…`, `CRO_…`, `CAZ_…`, …) |
+| `BLNAR-HFLU` | `ORGANISM` (*H. influenzae*) + `BETA_LACT` + an `AMP_…` column |
+| `ICR` | `ORGANISM` (staphylococcus or streptococcus) + `INDUC_CLI`, `MLS_DTEST`, `X_MLS` or `X_MLS_IND` |
 
-Rules for which the required fields are absent are automatically removed from consideration before evaluation.
+Values are compared exactly: use `+`, `-` and `p` as shown.
 
 ---
 
 ## Reading the output
 
-When `IncludeInterpretationComments: true`:
+| Where | `IncludeInterpretationComments: false` | `true` |
+|---|---|---|
+| file output, `amrie single`, REST | `R` | `R!` |
+| `interpret_single`, `IsolateInterpretation` (Python) | `R!` | `R!` |
 
-```
-AMP_ND10_INTERP → R!
+The `!` tells you the result was inferred, not measured — keep it on while reviewing
+data, and strip it for systems that only accept S/I/R.
+
+---
+
+## Looking rules up
+
+```python
+from amrie.expert_rule import EXPERT_INTERPRETATION_RULES, get_applicable_expert_rules
+
+for r in EXPERT_INTERPRETATION_RULES:
+    print(r.RULE_CODE, r.ORGANISM_CODE, r.CriteriaOperator,
+          [(c.test_name, c.test_result) for c in r.RULE_CRITERIA], len(r.AFFECTED_ANTIBIOTICS))
+# ESBL-CONFIRMED EBC OR [('ESBL', '+'), ('X_BLEE', 'p')] 4
+# ESBL-AMPC-PROBABLE EBC AND [('CEPH3', 'R')] 4
+# BLNAR-HFLU HIN AND [('BETA_LACT', '-'), ('AMP', 'NS')] 9
+# MRS STA OR [('MECA_PCR', '+'), ('MRSA', '+'), ('OXA_SCREEN', '+'), ('MRSA_SCRN', '+'), ('PBP2A_AGGL', '+')] 140
+# MRS STA OR [('OXA', 'NS'), ('FOX', 'NS')] 140
+# ICR STA OR [('INDUC_CLI', '+'), ('MLS_DTEST', '+'), ('X_MLS', 'p'), ('X_MLS_IND', 'p')] 33
+# ICR STR OR [('INDUC_CLI', '+'), ('MLS_DTEST', '+'), ('X_MLS', 'p'), ('X_MLS_IND', 'p')] 33
+
+[r.RULE_CODE for r in get_applicable_expert_rules("sau", ["FOX_ND30", "PEN_ND10"], ["OXA_SCREEN"], None)]
+# ['MRS', 'MRS']
 ```
 
-When `IncludeInterpretationComments: false` (default):
-
-```
-AMP_ND10_INTERP → R
-```
-
-The `!` suffix identifies results driven by expert rules; it is only meaningful when looking at the raw interpretation data, not in final clinical reports.
+REST: `POST /api/expert-rules` with `{"organism_code": "sau", "full_test_codes":
+["FOX_ND30", "PEN_ND10", "OXA_SCREEN"]}` returns both MRS rows with their criteria and
+affected drugs ([Web](web.md#post-apiexpert-rules)).
