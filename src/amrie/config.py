@@ -26,7 +26,7 @@ import orjson
 from amrie import constants as C
 from amrie.breakpoint import Breakpoint, BreakpointTypes, load_breakpoints
 from amrie.expert_rule import RuleCodes
-from amrie.paths import resource_path, system_root_path
+from amrie.paths import system_root_path
 
 _log = logging.getLogger(__name__)
 

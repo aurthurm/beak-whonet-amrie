@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 
@@ -77,7 +77,7 @@ class Breakpoint:
     WHONET_ABX_CODE: str
     WHONET_TEST: str
     R: Decimal
-    I: str
+    I: str  # noqa: E741 — column name in Breakpoints.txt (C# parity)
     SDD: str
     S: Decimal
     ECV_ECOFF: Decimal

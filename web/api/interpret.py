@@ -10,13 +10,13 @@ from fastapi import File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from nicegui import app
 
-from amrie import interpret_single
 from amrie.config import read_configuration
 from amrie.constants import Delimiters
 from amrie.io_library import interpret_isolates, load_input_file
 from web.helpers import (
     build_full_test_codes,
     generate_output_str,
+    interpret_for_display,
     make_single_tab_config,
 )
 from web.models.requests import SingleInterpretRequest
@@ -40,7 +40,7 @@ def _run_single_interpret(req: SingleInterpretRequest) -> SingleInterpretRespons
     )
     results: list[SingleInterpretResult] = []
     for code in full_codes:
-        interpretation = interpret_single(config, req.organism_code, code, req.measurement)
+        interpretation = interpret_for_display(config, req.organism_code, code, req.measurement)
         results.append(SingleInterpretResult(whonet_test=code, interpretation=interpretation))
     return SingleInterpretResponse(results=results)
 
